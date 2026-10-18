@@ -52,13 +52,9 @@ enum TTPlayerClassicColors {
     /// 频谱底部：深绿 #006600
     static let spectrumBottom = Color(hex: "#006600")
 
-    /// 频谱渐变
+    /// 频谱渐变。旧调用仍用绿色。
     static var spectrumGradient: LinearGradient {
-        LinearGradient(
-            colors: [spectrumTop, spectrumMid, spectrumBottom],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+        SpectrumPalette.green.gradient
     }
 
     // MARK: - 文字颜色
@@ -87,6 +83,35 @@ enum TTPlayerClassicColors {
             startPoint: .top,
             endPoint: .bottom
         )
+    }
+}
+
+enum SpectrumPalette: String, CaseIterable, Identifiable {
+    case green
+    case blue
+    case amber
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .green: return "绿色"
+        case .blue: return "蓝色"
+        case .amber: return "琥珀"
+        }
+    }
+
+    var gradient: LinearGradient {
+        let colors: [Color]
+        switch self {
+        case .green:
+            colors = [Color(hex: "#00FF00"), Color(hex: "#00AA00"), Color(hex: "#006600")]
+        case .blue:
+            colors = [Color(hex: "#8FE7FF"), Color(hex: "#2F8CFF"), Color(hex: "#123A73")]
+        case .amber:
+            colors = [Color(hex: "#FFE08A"), Color(hex: "#FF9F1A"), Color(hex: "#8A4B00")]
+        }
+        return LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
     }
 }
 

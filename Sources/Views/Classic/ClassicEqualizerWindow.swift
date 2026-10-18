@@ -10,6 +10,8 @@ import SwiftUI
 /// 经典均衡器窗口
 struct ClassicEqualizerWindow: View {
     @ObservedObject var equalizer: AudioEqualizer
+    var embedded = false
+    var onPopOut: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,6 +28,10 @@ struct ClassicEqualizerWindow: View {
                     .toggleStyle(.switch)
                     .labelsHidden()
                     .scaleEffect(0.7)
+
+                if embedded {
+                    PopOutButton(help: "在单独窗口打开均衡器", action: { onPopOut?() })
+                }
             }
             .padding(.horizontal, 8)
             .frame(height: 24)
@@ -61,7 +67,7 @@ struct ClassicEqualizerWindow: View {
             .background(TTPlayerClassicColors.secondaryBackground)
 
             // 频段控制
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 2) {
                 ForEach(equalizer.bands) { band in
                     EqualizerBandView(
                         band: band,
@@ -71,8 +77,8 @@ struct ClassicEqualizerWindow: View {
                     )
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(TTPlayerClassicColors.mainBackground)
         }
@@ -85,6 +91,13 @@ struct ClassicEqualizerWindow: View {
 struct EqualizerBandView: View {
     let band: EqualizerBand
     let onGainChange: (Float) -> Void
+
+    private var shortFrequency: String {
+        if band.frequency < 1000 {
+            return "\(Int(band.frequency))"
+        }
+        return "\(Int(band.frequency / 1000))k"
+    }
 
     var body: some View {
         VStack(spacing: 4) {
@@ -99,14 +112,17 @@ struct EqualizerBandView: View {
                     set: { onGainChange($0) }
                 )
             )
-            .frame(height: 140)
+            .frame(maxHeight: .infinity)
+            .frame(minHeight: 80)
 
-            Text(band.displayFrequency)
-                .font(.system(size: 9))
+            Text(shortFrequency)
+                .font(.system(size: 8))
                 .foregroundColor(TTPlayerClassicColors.tertiaryText)
-                .frame(height: 14)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(height: 12)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

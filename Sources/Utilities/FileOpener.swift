@@ -80,6 +80,44 @@ struct FileOpener {
             }
         }
     }
+
+    /// 打开 M3U / M3U8 播放列表
+    static func openPlaylist(completion: @escaping (URL?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.message = "选择播放列表"
+        panel.prompt = "打开"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [
+            UTType(filenameExtension: "m3u") ?? .plainText,
+            UTType(filenameExtension: "m3u8") ?? .plainText
+        ]
+        panel.begin { response in
+            completion(response == .OK ? panel.url : nil)
+        }
+    }
+
+    /// 把当前列表存成 M3U
+    static func savePlaylist(suggestedName: String, completion: @escaping (URL?) -> Void) {
+        let panel = NSSavePanel()
+        panel.message = "导出播放列表"
+        panel.nameFieldStringValue = suggestedName
+        panel.allowedContentTypes = [UTType(filenameExtension: "m3u") ?? .plainText]
+        panel.begin { response in
+            completion(response == .OK ? panel.url : nil)
+        }
+    }
+
+    /// 把歌词存成 LRC
+    static func saveLyric(suggestedName: String, completion: @escaping (URL?) -> Void) {
+        let panel = NSSavePanel()
+        panel.message = "保存歌词"
+        panel.nameFieldStringValue = suggestedName
+        panel.allowedContentTypes = [UTType(filenameExtension: "lrc") ?? .plainText]
+        panel.begin { response in
+            completion(response == .OK ? panel.url : nil)
+        }
+    }
 }
 
 // MARK: - View Extension

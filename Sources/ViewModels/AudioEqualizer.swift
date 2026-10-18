@@ -109,6 +109,11 @@ class AudioEqualizer: ObservableObject {
         return eq
     }
 
+    /// ReplayGain 加在整条均衡曲线上，不改各频段。
+    func setGlobalGain(db: Float) {
+        eq.globalGain = db
+    }
+
     // MARK: - Setup
 
     private func setupBands() {

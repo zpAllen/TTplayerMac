@@ -25,7 +25,8 @@ enum PlayMode: String, Codable, CaseIterable {
 }
 
 /// 播放列表
-class Playlist: ObservableObject, Codable {
+class Playlist: ObservableObject, Codable, Identifiable {
+    let id: UUID
     @Published var name: String
     @Published var tracks: [Track] = []
     @Published var currentIndex: Int = 0
@@ -33,7 +34,8 @@ class Playlist: ObservableObject, Codable {
 
     private var shuffleIndices: [Int] = []
 
-    init(name: String = "默认列表") {
+    init(id: UUID = UUID(), name: String = "默认列表") {
+        self.id = id
         self.name = name
     }
 
@@ -190,11 +192,12 @@ class Playlist: ObservableObject, Codable {
     // MARK: - Codable
 
     enum CodingKeys: String, CodingKey {
-        case name, tracks, currentIndex, playMode
+        case id, name, tracks, currentIndex, playMode
     }
 
     required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try container.decode(String.self, forKey: .name)
         tracks = try container.decode([Track].self, forKey: .tracks)
         currentIndex = try container.decode(Int.self, forKey: .currentIndex)
@@ -203,6 +206,7 @@ class Playlist: ObservableObject, Codable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
         try container.encode(name, forKey: .name)
         try container.encode(tracks, forKey: .tracks)
         try container.encode(currentIndex, forKey: .currentIndex)

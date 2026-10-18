@@ -207,17 +207,17 @@ struct ClassicControlBar: View {
             }
             .help(manager.playlist.playMode.rawValue)
 
-            ClassicButton(glyph: .list, isActive: panels.playlistDocked) {
-                panels.playlistDocked.toggle()
+            ClassicButton(glyph: .list, isActive: panels.playlistDocked && !panels.lyricsDocked && !panels.equalizerDocked) {
+                panels.togglePlaylist()
             }
             .help("播放列表")
 
-            ClassicButton(glyph: .lyric, isActive: panels.lyricsOpen) {
-                panels.toggleLyrics(syncEngine: manager.lyricSync, manager: manager)
+            ClassicButton(glyph: .lyric, isActive: panels.lyricsDocked || panels.lyricsOpen) {
+                panels.toggleLyrics(syncEngine: manager.lyricSync, manager: manager, desktopLyric: desktopLyric)
             }
             .help("歌词")
 
-            ClassicButton(glyph: .equalizer, isActive: panels.equalizerOpen) {
+            ClassicButton(glyph: .equalizer, isActive: panels.equalizerDocked || panels.equalizerOpen) {
                 panels.toggleEqualizer(equalizer: manager.equalizer)
             }
             .help("均衡器")
@@ -248,5 +248,22 @@ struct ClassicControlBar: View {
                 await manager.importTracks(from: urls)
             }
         }
+    }
+}
+
+/// 把停靠面板拆成单独窗口。
+struct PopOutButton: View {
+    var help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "macwindow.badge.plus")
+                .font(.system(size: 12))
+                .foregroundColor(TTPlayerClassicColors.primaryText)
+                .frame(width: 16, height: 16)
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 }

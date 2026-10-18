@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 @main
 struct TTPlayerApp: App {
@@ -14,6 +15,7 @@ struct TTPlayerApp: App {
     @StateObject private var panels = PanelController()
     @StateObject private var desktopLyric = DesktopLyricManager()
     @StateObject private var hotkeys = GlobalHotkeyManager()
+    @StateObject private var skins = SkinLibrary()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -22,7 +24,9 @@ struct TTPlayerApp: App {
                 .environmentObject(manager)
                 .environmentObject(panels)
                 .environmentObject(desktopLyric)
+                .environmentObject(skins)
                 .task {
+                    skins.loadDefault()
                     manager.restoreIfNeeded()
                     desktopLyric.loadSettings()
                     registerHotkeysIfNeeded()
@@ -48,6 +52,20 @@ struct TTPlayerApp: App {
                     }
                 }
                 .keyboardShortcut("o", modifiers: .command)
+
+                Button("导入播放列表...") {
+                    FileOpener.openPlaylist { url in
+                        guard let url else { return }
+                        Task { await manager.importPlaylistFile(from: url) }
+                    }
+                }
+
+                Button("导出播放列表...") {
+                    FileOpener.savePlaylist(suggestedName: manager.playlist.name + ".m3u") { url in
+                        guard let url else { return }
+                        try? manager.exportPlaylist(to: url)
+                    }
+                }
 
                 Divider()
 
@@ -107,16 +125,21 @@ struct TTPlayerApp: App {
                         }
                     }
                 }
+
+                Toggle("音量增益", isOn: Binding(
+                    get: { manager.player.replayGainEnabled },
+                    set: { manager.setReplayGainEnabled($0) }
+                ))
             }
 
             CommandMenu("窗口") {
                 Button("播放列表") {
-                    panels.playlistDocked.toggle()
+                    panels.togglePlaylist()
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
 
                 Button("歌词") {
-                    panels.toggleLyrics(syncEngine: manager.lyricSync, manager: manager)
+                    panels.toggleLyrics(syncEngine: manager.lyricSync, manager: manager, desktopLyric: desktopLyric)
                 }
                 .keyboardShortcut("l", modifiers: .command)
 
@@ -135,7 +158,38 @@ struct TTPlayerApp: App {
                 Button(panels.pinned ? "取消置顶" : "总在最前") {
                     panels.setPinned(!panels.pinned)
                 }
+
+                Menu("频谱颜色") {
+                    ForEach(SpectrumPalette.allCases) { palette in
+                        Button(palette.title) {
+                            UserDefaults.standard.set(palette.rawValue, forKey: "spectrum.palette")
+                        }
+                    }
+                }
+
+                Button("快捷键...") {
+                    panels.toggleHotkeys(hotkeys)
+                }
             }
+        }
+
+        MenuBarExtra {
+            Button(manager.player.isPlaying ? "暂停" : "播放") {
+                manager.togglePlayPause()
+            }
+            Button("上一首") { manager.playPrevious() }
+            Button("下一首") { manager.playNext() }
+            Divider()
+            Text(manager.player.currentTrack?.displayName ?? "未播放")
+            Divider()
+            Button("显示主窗口") {
+                NSApp.activate(ignoringOtherApps: true)
+                NSApp.windows.first { $0.title == "千千静听" }?.makeKeyAndOrderFront(nil)
+            }
+            Divider()
+            Button("退出") { NSApp.terminate(nil) }
+        } label: {
+            Image(systemName: "music.note")
         }
     }
 

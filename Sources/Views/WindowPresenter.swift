@@ -10,20 +10,57 @@ import SwiftUI
 @MainActor
 final class PanelController: ObservableObject {
     @Published var playlistDocked = true
+    @Published var lyricsDocked = false
+    @Published var equalizerDocked = false
     @Published var lyricsOpen = false
     @Published var equalizerOpen = false
+    @Published var hotkeysOpen = false
     @Published var pinned = false
 
     private var lyricsWindow: NSWindow?
     private var equalizerWindow: NSWindow?
+    private var hotkeyWindow: NSWindow?
     private var lyricsDelegate: WindowCloseProxy?
     private var equalizerDelegate: WindowCloseProxy?
+    private var hotkeyDelegate: WindowCloseProxy?
 
-    func toggleLyrics(syncEngine: LyricSyncEngine, manager: PlaybackManager) {
-        if presentExisting(lyricsWindow, flag: \.lyricsOpen) { return }
+    /// 列表、歌词、均衡器下面只留一个。再点当前这个就收起。
+    func togglePlaylist() {
+        if playlistDocked && !lyricsDocked && !equalizerDocked {
+            playlistDocked = false
+            return
+        }
+        showPlaylist()
+    }
 
+    /// 和列表一样：有则收起，没有则停在播放器下面。独立窗口开着时，再点一次关掉窗口。
+    func toggleLyrics(syncEngine _: LyricSyncEngine, manager _: PlaybackManager, desktopLyric _: DesktopLyricManager) {
+        if lyricsDocked {
+            lyricsDocked = false
+            return
+        }
+        if lyricsWindow?.isVisible == true {
+            lyricsWindow?.orderOut(nil)
+            lyricsOpen = false
+            return
+        }
+        showLyrics()
+    }
+
+    func popOutLyrics(syncEngine: LyricSyncEngine, manager: PlaybackManager, desktopLyric: DesktopLyricManager) {
+        lyricsDocked = false
+        if !equalizerDocked {
+            playlistDocked = true
+        }
+        if let window = lyricsWindow {
+            window.makeKeyAndOrderFront(nil)
+            lyricsOpen = true
+            return
+        }
         let window = makeWindow(
-            root: ClassicLyricWindow(syncEngine: syncEngine).environmentObject(manager),
+            root: ClassicLyricWindow(syncEngine: syncEngine)
+                .environmentObject(manager)
+                .environmentObject(desktopLyric),
             title: "歌词",
             size: NSSize(width: 420, height: 520),
             resizable: true
@@ -37,9 +74,29 @@ final class PanelController: ObservableObject {
         window.makeKeyAndOrderFront(nil)
     }
 
-    func toggleEqualizer(equalizer: AudioEqualizer) {
-        if presentExisting(equalizerWindow, flag: \.equalizerOpen) { return }
+    func toggleEqualizer(equalizer _: AudioEqualizer) {
+        if equalizerDocked {
+            equalizerDocked = false
+            return
+        }
+        if equalizerWindow?.isVisible == true {
+            equalizerWindow?.orderOut(nil)
+            equalizerOpen = false
+            return
+        }
+        showEqualizer()
+    }
 
+    func popOutEqualizer(equalizer: AudioEqualizer) {
+        equalizerDocked = false
+        if !lyricsDocked {
+            playlistDocked = true
+        }
+        if let window = equalizerWindow {
+            window.makeKeyAndOrderFront(nil)
+            equalizerOpen = true
+            return
+        }
         let window = makeWindow(
             root: ClassicEqualizerWindow(equalizer: equalizer),
             title: "均衡器",
@@ -53,6 +110,42 @@ final class PanelController: ObservableObject {
         equalizerWindow = window
         equalizerOpen = true
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func toggleHotkeys(_ hotkeys: GlobalHotkeyManager) {
+        if presentExisting(hotkeyWindow, flag: \.hotkeysOpen) { return }
+
+        let window = makeWindow(
+            root: HotkeySettingsView(hotkeys: hotkeys),
+            title: "快捷键",
+            size: NSSize(width: 400, height: 320),
+            resizable: false
+        )
+        hotkeyDelegate = WindowCloseProxy { [weak self] in
+            self?.hotkeysOpen = false
+        }
+        window.delegate = hotkeyDelegate
+        hotkeyWindow = window
+        hotkeysOpen = true
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func showPlaylist() {
+        lyricsDocked = false
+        equalizerDocked = false
+        playlistDocked = true
+    }
+
+    private func showLyrics() {
+        playlistDocked = false
+        equalizerDocked = false
+        lyricsDocked = true
+    }
+
+    private func showEqualizer() {
+        playlistDocked = false
+        lyricsDocked = false
+        equalizerDocked = true
     }
 
     func setPinned(_ pinned: Bool) {
@@ -115,6 +208,9 @@ final class WindowCloseProxy: NSObject, NSWindowDelegate {
 struct PlayerWindowHost: NSViewRepresentable {
     var playlistDocked: Bool
     var pinned: Bool
+    var skinSize: CGSize?
+    /// 停靠的歌词和均衡器占用的高度。播放器按这个高度长高或缩短。
+    var dockedExtra: CGFloat = 0
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
@@ -130,7 +226,10 @@ struct PlayerWindowHost: NSViewRepresentable {
                 window.titlebarAppearsTransparent = true
                 window.titleVisibility = .hidden
                 window.styleMask.insert(.fullSizeContentView)
-                window.isMovableByWindowBackground = true
+                // SwiftUI 输入框内部的文字层 mouseDownCanMoveWindow 为 true。
+                // 若再开背景拖动，点搜索框会变成拖窗口，光标和文字都进不去。
+                // 皮肤空白处由 SkinCanvas.performDrag 拖动窗口。
+                window.isMovableByWindowBackground = false
                 window.backgroundColor = NSColor(srgbRed: 0x1B / 255, green: 0x24 / 255, blue: 0x2C / 255, alpha: 1)
                 window.standardWindowButton(.closeButton)?.isHidden = true
                 window.standardWindowButton(.miniaturizeButton)?.isHidden = true
@@ -138,21 +237,64 @@ struct PlayerWindowHost: NSViewRepresentable {
             }
 
             window.level = self.pinned ? .floating : .normal
+            context.coordinator.watch(window)
 
             let chrome = PlayerMetrics.chrome
             let dockChanged = context.coordinator.playlistDocked != self.playlistDocked
+            let skinChanged = context.coordinator.skinSize != self.skinSize
+            let previousExtra = context.coordinator.dockedExtra ?? self.dockedExtra
+            let extraChanged = previousExtra != self.dockedExtra
             context.coordinator.playlistDocked = self.playlistDocked
+            context.coordinator.skinSize = self.skinSize
+            context.coordinator.dockedExtra = self.dockedExtra
+            let extra = self.dockedExtra
 
-            if self.playlistDocked {
-                window.minSize = NSSize(width: 460, height: chrome + 160)
+            if let skin = self.skinSize {
+                window.isOpaque = false
+                window.backgroundColor = .clear
+                window.contentView?.wantsLayer = true
+                window.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
+                let showsPlaylist = self.playlistDocked
+                let minimum = skin.height + (showsPlaylist ? 120 : 0) + extra
+                window.minSize = NSSize(width: skin.width, height: minimum)
+                window.maxSize = NSSize(width: 1200, height: showsPlaylist ? 2400 : 900)
+                let scale = max(window.frame.width, skin.width) / skin.width
+                let skinHeight = skin.height * scale
+                var height = window.frame.height
+                if skinChanged || (dockChanged && showsPlaylist && height < skinHeight + 160) {
+                    height = skinHeight + (showsPlaylist ? 280 : 0)
+                }
+                if dockChanged && !showsPlaylist {
+                    height = skinHeight
+                }
+                if !showsPlaylist {
+                    height = skinHeight
+                }
+                height = max(height, showsPlaylist ? skinHeight + 120 : skinHeight)
+                let width = min(max(window.frame.width, skin.width), 1200)
+                if skinChanged || dockChanged || extraChanged || abs(window.frame.height - height) > 1 {
+                    self.resize(window, size: NSSize(width: width, height: height))
+                }
+                return
+            }
+
+            window.isOpaque = true
+            window.backgroundColor = NSColor(srgbRed: 0x1B / 255, green: 0x24 / 255, blue: 0x2C / 255, alpha: 1)
+
+            if self.playlistDocked || extra > 0 {
+                window.minSize = NSSize(width: 460, height: chrome + (self.playlistDocked ? 160 : 0) + extra)
                 window.maxSize = NSSize(width: 1400, height: 2400)
-                if dockChanged, window.frame.height < chrome + 180 {
-                    self.resize(window, height: chrome + 300)
+                if skinChanged {
+                    self.resize(window, height: chrome + (self.playlistDocked ? 300 : 0) + extra)
+                } else if extraChanged {
+                    self.resize(window, height: max(window.frame.height + extra - previousExtra, window.minSize.height))
+                } else if dockChanged, window.frame.height < chrome + 180 + extra {
+                    self.resize(window, height: chrome + 300 + extra)
                 }
             } else {
                 window.minSize = NSSize(width: 460, height: chrome)
                 window.maxSize = NSSize(width: 1400, height: chrome)
-                if dockChanged || abs(window.frame.height - chrome) > 1 {
+                if dockChanged || extraChanged || abs(window.frame.height - chrome) > 1 {
                     self.resize(window, height: chrome)
                 }
             }
@@ -164,14 +306,61 @@ struct PlayerWindowHost: NSViewRepresentable {
     }
 
     private func resize(_ window: NSWindow, height: CGFloat) {
+        resize(window, size: NSSize(width: window.frame.width, height: height))
+    }
+
+    private func resize(_ window: NSWindow, size: NSSize) {
         var frame = window.frame
-        frame.origin.y += frame.size.height - height
-        frame.size.height = height
-        window.setFrame(frame, display: true, animate: false)
+        frame.origin.y += frame.size.height - size.height
+        frame.size = size
+        window.setFrame(frame, display: false, animate: false)
     }
 
     final class Coordinator {
         var didConfigure = false
         var playlistDocked: Bool?
+        var skinSize: CGSize?
+        var dockedExtra: CGFloat?
+        private var resizeToken: NSObjectProtocol?
+        private var snapping = false
+        private var snapScheduled = false
+
+        func watch(_ window: NSWindow) {
+            guard resizeToken == nil else { return }
+            resizeToken = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResizeNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.snap(window)
+                }
+            }
+        }
+
+        /// 拉宽时皮肤变高。没有下方面板时，窗口高度跟着皮肤走，避免底下透出桌面。
+        private func snap(_ window: NSWindow) {
+            guard let skin = skinSize, skin.width > 1, !snapping, !snapScheduled else { return }
+            let skinHeight = skin.height * window.frame.width / skin.width
+            let docked = playlistDocked == true
+            let target = docked ? max(window.frame.height, skinHeight + 120) : skinHeight
+            guard abs(window.frame.height - target) > 1 else { return }
+            snapScheduled = true
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window else { return }
+                self.snapScheduled = false
+                guard !self.snapping else { return }
+                let skinHeight = skin.height * window.frame.width / skin.width
+                let docked = self.playlistDocked == true
+                let target = docked ? max(window.frame.height, skinHeight + 120) : skinHeight
+                guard abs(window.frame.height - target) > 1 else { return }
+                self.snapping = true
+                var frame = window.frame
+                frame.origin.y += frame.size.height - target
+                frame.size.height = target
+                window.setFrame(frame, display: false, animate: false)
+                self.snapping = false
+            }
+        }
     }
 }

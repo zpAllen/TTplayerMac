@@ -7,71 +7,119 @@
 
 import Foundation
 import Combine
+import AppKit
+import MediaPlayer
 
 /// 播放管理器
 class PlaybackManager: ObservableObject {
     // MARK: - Published Properties
 
     @Published var player: EnhancedAudioPlayer
+    @Published var playlists: [Playlist]
     @Published var playlist: Playlist
     @Published var lyricSync: LyricSyncEngine
-    @Published var playlistManager: PlaylistManager
     @Published var equalizer: AudioEqualizer
 
     // MARK: - Private Properties
 
     private var cancellables = Set<AnyCancellable>()
+    private var playlistEvents: AnyCancellable?
     private let lyricSearchEngine = LyricSearchEngine()
+    private var didRestore = false
+    private var isRestoring = false
 
     // MARK: - Initialization
 
     init() {
         let player = EnhancedAudioPlayer()
         self.player = player
-        self.playlist = Playlist(name: "默认列表")
+        let initial = Playlist(name: "默认列表")
+        self.playlists = [initial]
+        self.playlist = initial
         self.lyricSync = LyricSyncEngine()
-        self.playlistManager = PlaylistManager()
         // 复用播放器内接入音频链的均衡器实例，避免 UI 绑定到孤儿实例
         self.equalizer = player.equalizer
 
         setupObservers()
+        observePlaylist(initial)
+        setupRemoteCommands()
     }
-
-    private var didRestore = false
 
     /// 启动时恢复均衡器曲线和上次的播放列表
     func restoreIfNeeded() {
         guard !didRestore else { return }
         didRestore = true
+        isRestoring = true
 
         equalizer.loadSettings()
-
-        let paths = UserDefaults.standard.stringArray(forKey: "playlist.paths") ?? []
-        if let modeName = UserDefaults.standard.string(forKey: "playlist.mode"),
-           let mode = PlayMode(rawValue: modeName) {
-            playlist.playMode = mode
+        if UserDefaults.standard.object(forKey: "audio.replayGain") != nil {
+            player.setReplayGainEnabled(UserDefaults.standard.bool(forKey: "audio.replayGain"))
         }
 
-        let tracks = paths.compactMap { path -> Track? in
-            guard FileManager.default.fileExists(atPath: path) else { return nil }
-            let url = URL(fileURLWithPath: path)
-            return Track(url: url, title: url.deletingPathExtension().lastPathComponent)
-        }
-        if !tracks.isEmpty {
-            playlist.add(tracks: tracks)
-        }
+        let restored = loadLibrary()
+        playlists = restored.lists
+        playlist = restored.current
+        observePlaylist(playlist)
+
+        isRestoring = false
+        persist()
 
         Task {
             await enrichMetadata()
         }
     }
 
-    /// 记住列表、播放模式和均衡器
+    /// 记住全部列表、当前列表、播放模式、均衡器和音量增益
     func persist() {
-        guard didRestore else { return }
+        guard didRestore, !isRestoring else { return }
+        let library = SavedLibrary(
+            currentID: playlist.id,
+            lists: playlists.map { list in
+                SavedPlaylist(
+                    id: list.id,
+                    name: list.name,
+                    paths: list.tracks.map(\.url.path),
+                    currentIndex: list.currentIndex,
+                    playMode: list.playMode.rawValue
+                )
+            }
+        )
+        if let data = try? JSONEncoder().encode(library) {
+            UserDefaults.standard.set(data, forKey: "library.v1")
+        }
         UserDefaults.standard.set(playlist.tracks.map(\.url.path), forKey: "playlist.paths")
         UserDefaults.standard.set(playlist.playMode.rawValue, forKey: "playlist.mode")
+        UserDefaults.standard.set(player.replayGainEnabled, forKey: "audio.replayGain")
         equalizer.saveSettings()
+    }
+
+    func selectPlaylist(id: UUID) {
+        guard let next = playlists.first(where: { $0.id == id }) else { return }
+        playlist = next
+        observePlaylist(next)
+        persist()
+    }
+
+    func createPlaylist(named name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let list = Playlist(name: trimmed.isEmpty ? "未命名列表" : trimmed)
+        playlists.append(list)
+        selectPlaylist(id: list.id)
+    }
+
+    func deletePlaylist(id: UUID) {
+        guard playlists.count > 1 else { return }
+        playlists.removeAll { $0.id == id }
+        if playlist.id == id, let first = playlists.first {
+            playlist = first
+            observePlaylist(first)
+        }
+        persist()
+    }
+
+    func setReplayGainEnabled(_ enabled: Bool) {
+        player.setReplayGainEnabled(enabled)
+        persist()
     }
 
     func cyclePlayMode() {
@@ -99,12 +147,18 @@ class PlaybackManager: ObservableObject {
                 playlist.tracks[index].album = loaded.album
                 playlist.tracks[index].duration = loaded.duration
                 playlist.tracks[index].artworkData = loaded.artworkData
+                playlist.tracks[index].replayGainDB = loaded.replayGainDB
+                playlist.tracks[index].replayPeak = loaded.replayPeak
                 if var current = player.currentTrack, current.url == track.url {
                     current.artworkData = loaded.artworkData
                     current.title = loaded.title
                     current.artist = loaded.artist
                     current.album = loaded.album
+                    current.replayGainDB = loaded.replayGainDB
+                    current.replayPeak = loaded.replayPeak
                     player.currentTrack = current
+                    player.updateReplayGain(db: loaded.replayGainDB, peak: loaded.replayPeak)
+                    updateNowPlaying()
                 }
             }
         }
@@ -121,8 +175,9 @@ class PlaybackManager: ObservableObject {
 
         lyricSync.connect(to: player)
 
-        // 子对象的变化要冒泡，主窗口才能跟着进度、歌词和列表刷新
-        for object in [player.objectWillChange, playlist.objectWillChange, lyricSync.objectWillChange, equalizer.objectWillChange] {
+        // 子对象的变化要冒泡，主窗口才能跟着进度、歌词和列表刷新。
+        // 列表实例会切换，单独在 observePlaylist 里订阅。
+        for object in [player.objectWillChange, lyricSync.objectWillChange, equalizer.objectWillChange] {
             object
                 .sink { [weak self] _ in
                     self?.objectWillChange.send()
@@ -130,13 +185,34 @@ class PlaybackManager: ObservableObject {
                 .store(in: &cancellables)
         }
 
-        playlist.objectWillChange
+        player.$isPlaying
             .sink { [weak self] _ in
-                DispatchQueue.main.async {
-                    self?.persist()
-                }
+                self?.updateNowPlaying()
             }
             .store(in: &cancellables)
+
+        player.$currentTrack
+            .sink { [weak self] _ in
+                self?.updateNowPlaying()
+            }
+            .store(in: &cancellables)
+
+        Timer.publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                guard self?.player.isPlaying == true else { return }
+                self?.updateNowPlaying()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func observePlaylist(_ playlist: Playlist) {
+        playlistEvents = playlist.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+            DispatchQueue.main.async {
+                self?.persist()
+            }
+        }
     }
 
     // MARK: - Playback Control
@@ -167,10 +243,7 @@ class PlaybackManager: ObservableObject {
 
     /// 播放指定曲目
     func play(track: Track) {
-        player.load(track: track)
-        player.play()
-
-        // 自动加载歌词
+        player.playTrack(track)
         loadLyrics(for: track)
     }
 
@@ -303,5 +376,173 @@ class PlaybackManager: ObservableObject {
     /// 静音开关
     func toggleMute() {
         player.toggleMute()
+        updateNowPlaying()
     }
+
+    // MARK: - 播放列表文件
+
+    func exportPlaylist(to url: URL) throws {
+        var lines = ["#EXTM3U"]
+        for track in playlist.tracks {
+            let seconds = Int(track.duration.rounded())
+            lines.append("#EXTINF:\(seconds),\(track.displayName)")
+            lines.append(track.url.path)
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    func importPlaylistFile(from url: URL) async {
+        guard let text = Self.playlistText(at: url) else { return }
+        let files = Self.playlistEntries(in: text, relativeTo: url.deletingLastPathComponent())
+        await importTracks(from: files)
+    }
+
+    // MARK: - 正在播放
+
+    private func setupRemoteCommands() {
+        let center = MPRemoteCommandCenter.shared()
+        center.playCommand.isEnabled = true
+        center.pauseCommand.isEnabled = true
+        center.togglePlayPauseCommand.isEnabled = true
+        center.nextTrackCommand.isEnabled = true
+        center.previousTrackCommand.isEnabled = true
+        center.changePlaybackPositionCommand.isEnabled = true
+
+        center.playCommand.addTarget { [weak self] _ in
+            self?.performOnMain { if self?.player.isPlaying == false { self?.togglePlayPause() } }
+            return .success
+        }
+        center.pauseCommand.addTarget { [weak self] _ in
+            self?.performOnMain { if self?.player.isPlaying == true { self?.player.pause() } }
+            return .success
+        }
+        center.togglePlayPauseCommand.addTarget { [weak self] _ in
+            self?.performOnMain { self?.togglePlayPause() }
+            return .success
+        }
+        center.nextTrackCommand.addTarget { [weak self] _ in
+            self?.performOnMain { self?.playNext() }
+            return .success
+        }
+        center.previousTrackCommand.addTarget { [weak self] _ in
+            self?.performOnMain { self?.playPrevious() }
+            return .success
+        }
+        center.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let position = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            self?.performOnMain { self?.player.seek(to: position.positionTime) }
+            return .success
+        }
+    }
+
+    private func performOnMain(_ body: @escaping () -> Void) {
+        if Thread.isMainThread {
+            body()
+        } else {
+            DispatchQueue.main.async(execute: body)
+        }
+    }
+
+    private func updateNowPlaying() {
+        guard let track = player.currentTrack else {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            return
+        }
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: track.title,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: player.currentTime,
+            MPMediaItemPropertyPlaybackDuration: player.duration,
+            MPNowPlayingInfoPropertyPlaybackRate: player.isPlaying ? 1.0 : 0.0
+        ]
+        if let artist = track.artist, !artist.isEmpty {
+            info[MPMediaItemPropertyArtist] = artist
+        }
+        if let album = track.album, !album.isEmpty {
+            info[MPMediaItemPropertyAlbumTitle] = album
+        }
+        if let data = track.artworkData, let image = NSImage(data: data) {
+            let size = image.size
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: size) { _ in image }
+        }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    // MARK: - 列表存档
+
+    private func loadLibrary() -> (lists: [Playlist], current: Playlist) {
+        if let data = UserDefaults.standard.data(forKey: "library.v1"),
+           let library = try? JSONDecoder().decode(SavedLibrary.self, from: data),
+           !library.lists.isEmpty {
+            let lists = library.lists.map(Self.makePlaylist)
+            let current = lists.first { $0.id == library.currentID } ?? lists[0]
+            return (lists, current)
+        }
+
+        let list = Playlist(name: "默认列表")
+        if let modeName = UserDefaults.standard.string(forKey: "playlist.mode"),
+           let mode = PlayMode(rawValue: modeName) {
+            list.playMode = mode
+        }
+        let paths = UserDefaults.standard.stringArray(forKey: "playlist.paths") ?? []
+        list.add(tracks: Self.tracks(from: paths))
+        return ([list], list)
+    }
+
+    private static func makePlaylist(_ saved: SavedPlaylist) -> Playlist {
+        let list = Playlist(id: saved.id, name: saved.name)
+        if let mode = PlayMode(rawValue: saved.playMode) {
+            list.playMode = mode
+        }
+        list.add(tracks: tracks(from: saved.paths))
+        if !list.tracks.isEmpty {
+            list.currentIndex = min(max(0, saved.currentIndex), list.tracks.count - 1)
+        }
+        return list
+    }
+
+    private static func tracks(from paths: [String]) -> [Track] {
+        paths.compactMap { path in
+            guard FileManager.default.fileExists(atPath: path) else { return nil }
+            let url = URL(fileURLWithPath: path)
+            return Track(url: url, title: url.deletingPathExtension().lastPathComponent)
+        }
+    }
+
+    private static func playlistText(at url: URL) -> String? {
+        if let text = try? String(contentsOf: url, encoding: .utf8) { return text }
+        let gb18030 = String.Encoding(
+            rawValue: CFStringConvertEncodingToNSStringEncoding(
+                CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)
+            )
+        )
+        return try? String(contentsOf: url, encoding: gb18030)
+    }
+
+    private static func playlistEntries(in text: String, relativeTo base: URL) -> [URL] {
+        text.split(whereSeparator: \.isNewline).compactMap { raw in
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\\", with: "/")
+            guard !line.isEmpty, !line.hasPrefix("#") else { return nil }
+            if line.hasPrefix("file://"), let url = URL(string: line) {
+                return url
+            }
+            if line.hasPrefix("/") {
+                return URL(fileURLWithPath: line)
+            }
+            return base.appendingPathComponent(line)
+        }
+    }
+}
+
+private struct SavedPlaylist: Codable {
+    var id: UUID
+    var name: String
+    var paths: [String]
+    var currentIndex: Int
+    var playMode: String
+}
+
+private struct SavedLibrary: Codable {
+    var currentID: UUID
+    var lists: [SavedPlaylist]
 }

@@ -175,4 +175,28 @@ class LyricDocument: ObservableObject {
         guard let line = currentLine(at: time) else { return nil }
         return lines.firstIndex { $0.id == line.id }
     }
+
+    /// 导出听到的时间轴。时间里已经含文件内的 offset，再叠加用户偏移，因此不再写 [offset:]。
+    func exportedLRC(shiftingBy extra: TimeInterval) -> String {
+        var output: [String] = []
+        if let title = metadata.title, !title.isEmpty {
+            output.append("[ti:\(title)]")
+        }
+        if let artist = metadata.artist, !artist.isEmpty {
+            output.append("[ar:\(artist)]")
+        }
+        if let album = metadata.album, !album.isEmpty {
+            output.append("[al:\(album)]")
+        }
+        if let creator = metadata.creator, !creator.isEmpty {
+            output.append("[by:\(creator)]")
+        }
+        for line in lines where !line.text.isEmpty {
+            let time = max(0, line.timestamp + extra)
+            let minutes = Int(time) / 60
+            let seconds = time - Double(minutes * 60)
+            output.append(String(format: "[%02d:%05.2f]%@", minutes, seconds, line.text))
+        }
+        return output.joined(separator: "\n") + "\n"
+    }
 }

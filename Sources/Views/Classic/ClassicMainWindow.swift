@@ -8,41 +8,120 @@
 import SwiftUI
 import AppKit
 
+private struct PlayerWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct ClassicMainWindow: View {
     @EnvironmentObject private var manager: PlaybackManager
     @EnvironmentObject private var panels: PanelController
     @EnvironmentObject private var desktopLyric: DesktopLyricManager
+    @EnvironmentObject private var skins: SkinLibrary
+    @State private var contentWidth: CGFloat = 0
+
+    private var activeSkin: LoadedWindow? {
+        skins.skin?.player
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            titleBar
-            playbackStage
-            ClassicProgressBar(
+            if let activeSkin {
+                let width = contentWidth > 1 ? contentWidth : activeSkin.size.width
+                let height = width * activeSkin.size.height / activeSkin.size.width
+                SkinPlayerView(
+                    window: activeSkin,
+                    snapshot: skinSnapshot,
+                    analyzer: manager.player.analyzer,
+                    onButton: handleSkinButton,
+                    onSeek: { manager.player.seek(to: $0) },
+                    onVolume: { manager.player.setVolume($0) }
+                )
+                .frame(width: width, height: height)
+            } else {
+                titleBar
+                playbackStage
+                ClassicProgressBar(
                 current: manager.player.currentTime,
                 total: manager.player.duration,
                 onSeek: { manager.player.seek(to: $0) }
             )
-            ClassicControlBar(manager: manager)
+                ClassicControlBar(manager: manager)
+            }
 
-            if panels.playlistDocked {
-                ClassicPlaylistView(
-                    playlist: manager.playlist,
-                    currentTrack: Binding(
-                        get: { manager.player.currentTrack },
-                        set: { manager.player.currentTrack = $0 }
-                    ),
-                    onTrackSelected: { manager.play(track: $0) },
-                    onImport: { urls in
-                        Task { await manager.importTracks(from: urls) }
-                    },
-                    onClear: { manager.clearPlaylist() }
-                )
+            if panels.lyricsDocked {
+                ClassicLyricWindow(syncEngine: manager.lyricSync, embedded: true) {
+                    panels.popOutLyrics(
+                        syncEngine: manager.lyricSync,
+                        manager: manager,
+                        desktopLyric: desktopLyric
+                    )
+                }
                 .frame(maxHeight: .infinity)
             }
+
+            if panels.equalizerDocked {
+                ClassicEqualizerWindow(equalizer: manager.equalizer, embedded: true) {
+                    panels.popOutEqualizer(equalizer: manager.equalizer)
+                }
+                .frame(maxHeight: .infinity)
+            }
+
+            ClassicPlaylistView(
+                playlist: manager.playlist,
+                lists: manager.playlists,
+                currentTrackID: manager.player.currentTrack?.id,
+                onTrackSelected: { manager.play(track: $0) },
+                onImport: { urls in
+                    Task { await manager.importTracks(from: urls) }
+                },
+                onClear: { manager.clearPlaylist() },
+                onSelectList: { manager.selectPlaylist(id: $0) },
+                onCreateList: { manager.createPlaylist(named: $0) },
+                onDeleteList: { manager.deletePlaylist(id: $0) },
+                onImportList: { url in
+                    Task { await manager.importPlaylistFile(from: url) }
+                },
+                onExportList: { url in
+                    try? manager.exportPlaylist(to: url)
+                },
+                onCyclePlayMode: { manager.cyclePlayMode() }
+            )
+            .id(manager.playlist.id)
+            .frame(minHeight: 0, maxHeight: panels.playlistDocked ? .infinity : 0)
+            .clipped()
+            .allowsHitTesting(panels.playlistDocked)
+            .accessibilityHidden(!panels.playlistDocked)
         }
-        .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(TTPlayerClassicColors.mainBackground)
-        .background(PlayerWindowHost(playlistDocked: panels.playlistDocked, pinned: panels.pinned))
+        .frame(
+            minWidth: activeSkin?.size.width ?? 460,
+            maxWidth: .infinity,
+            maxHeight: .infinity,
+            alignment: .top
+        )
+        .background(activeSkin == nil ? TTPlayerClassicColors.mainBackground : Color.clear)
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(key: PlayerWidthKey.self, value: proxy.size.width)
+            }
+        }
+        .onPreferenceChange(PlayerWidthKey.self) { newWidth in
+            // 宽度在布局过程中写回状态，会让正在排版的窗口再改约束，双击列表就会崩。
+            guard newWidth > 1, abs(newWidth - contentWidth) > 0.5 else { return }
+            DispatchQueue.main.async {
+                if abs(newWidth - self.contentWidth) > 0.5 {
+                    self.contentWidth = newWidth
+                }
+            }
+        }
+        .ignoresSafeArea()
+        .background(PlayerWindowHost(
+            playlistDocked: bottomDocked,
+            pinned: panels.pinned,
+            skinSize: activeSkin?.size
+        ))
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
             return true
@@ -57,6 +136,73 @@ struct ClassicMainWindow: View {
             if visible {
                 pushDesktopLyric()
             }
+        }
+    }
+
+    /// 列表、歌词、均衡器共用播放器下面这一块，窗口高度不随切换跳动。
+    private var bottomDocked: Bool {
+        panels.playlistDocked || panels.lyricsDocked || panels.equalizerDocked
+    }
+
+    private var skinSnapshot: SkinSnapshot {
+        let track = manager.player.currentTrack
+        let status: String
+        if manager.player.isPlaying {
+            status = "播放"
+        } else if manager.player.canResume, manager.player.currentTime > 0 {
+            status = "暂停"
+        } else {
+            status = "停止"
+        }
+        let count = manager.playlist.tracks.count
+        return SkinSnapshot(
+            isPlaying: manager.player.isPlaying,
+            isMuted: manager.player.isMuted,
+            time: manager.player.currentTime,
+            duration: manager.player.duration,
+            volume: manager.player.volume,
+            title: track?.displayName ?? "千千静听",
+            status: status,
+            playlistOn: panels.playlistDocked,
+            lyricsOn: panels.lyricsDocked || panels.lyricsOpen,
+            equalizerOn: panels.equalizerDocked || panels.equalizerOpen,
+            desktopLyricOn: desktopLyric.isVisible,
+            canPrev: count > 0 && manager.playlist.currentIndex > 0,
+            canNext: count > 0 && manager.playlist.currentIndex < count - 1
+        )
+    }
+
+    private func handleSkinButton(_ id: String) {
+        switch id {
+        case "play", "pause":
+            manager.togglePlayPause()
+        case "prev":
+            manager.playPrevious()
+        case "next":
+            manager.playNext()
+        case "stop":
+            manager.player.stop()
+        case "open":
+            FileOpener.openAudioFiles { urls in
+                guard !urls.isEmpty else { return }
+                Task { await manager.importTracks(from: urls) }
+            }
+        case "mute":
+            manager.toggleMute()
+        case "lyric":
+            panels.toggleLyrics(syncEngine: manager.lyricSync, manager: manager, desktopLyric: desktopLyric)
+        case "equalizer":
+            panels.toggleEqualizer(equalizer: manager.equalizer)
+        case "playlist":
+            panels.togglePlaylist()
+        case "minimize":
+            NSApp.keyWindow?.miniaturize(nil)
+        case "exit":
+            NSApp.terminate(nil)
+        case "browser":
+            desktopLyric.toggle()
+        default:
+            break
         }
     }
 

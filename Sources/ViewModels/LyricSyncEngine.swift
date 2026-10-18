@@ -15,10 +15,13 @@ class LyricSyncEngine: ObservableObject {
     @Published var currentLine: LRCLine?
     @Published var currentIndex: Int?
     @Published var progress: Double = 0.0  // 当前行播放进度 0.0 ~ 1.0
+    /// 用户额外提前或延后，单位秒。和文件里的 [offset:] 分开，避免存 LRC 时加两次。
+    @Published var userOffset: TimeInterval = UserDefaults.standard.double(forKey: "lyrics.userOffset")
 
     // MARK: - Private Properties
 
     private var document: LyricDocument?
+    private var lastTime: TimeInterval = 0
     private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Initialization
@@ -56,13 +59,28 @@ class LyricSyncEngine: ObservableObject {
 
     // MARK: - Update
 
+    /// 提前为负，延后为正，限制在 ±10 秒。改完立刻按当前进度重对齐。
+    func setUserOffset(_ value: TimeInterval) {
+        let clamped = min(10, max(-10, value))
+        userOffset = clamped
+        UserDefaults.standard.set(clamped, forKey: "lyrics.userOffset")
+        update(time: lastTime)
+    }
+
+    /// 把当前歌词存成听到的时间轴。
+    func exportedLRC() -> String? {
+        guard let document, !document.lines.isEmpty else { return nil }
+        return document.exportedLRC(shiftingBy: userOffset)
+    }
+
     /// 更新当前时间（秒）
     func update(time: TimeInterval) {
+        lastTime = time
         guard let document = document else { return }
 
-        // 查找当前行
-        let newLine = document.currentLine(at: time)
-        let newIndex = document.currentLineIndex(at: time)
+        let adjusted = time + userOffset
+        let newLine = document.currentLine(at: adjusted)
+        let newIndex = document.currentLineIndex(at: adjusted)
 
         // 更新当前行
         if newLine?.id != currentLine?.id {
@@ -77,11 +95,11 @@ class LyricSyncEngine: ObservableObject {
             if let index = newIndex, index + 1 < document.lines.count {
                 nextTime = document.lines[index + 1].timestamp
             } else {
-                nextTime = time + 5.0  // 默认5秒后
+                nextTime = adjusted + 5.0
             }
 
             let duration = nextTime - line.timestamp
-            let elapsed = time - line.timestamp
+            let elapsed = adjusted - line.timestamp
 
             progress = duration > 0 ? min(1.0, max(0.0, elapsed / duration)) : 0.0
         } else {

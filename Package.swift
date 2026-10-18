@@ -13,8 +13,17 @@ let package = Package(
         )
     ],
     targets: [
+        .target(
+            name: "CInflate",
+            path: "CInflate",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedLibrary("z")
+            ]
+        ),
         .executableTarget(
             name: "TTPlayer",
+            dependencies: ["CInflate"],
             path: "Sources",
             resources: [
                 .process("Resources")

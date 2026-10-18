@@ -17,6 +17,8 @@ struct Track: Identifiable, Codable, Equatable {
     var album: String?
     var duration: TimeInterval
     var artworkData: Data?
+    var replayGainDB: Float?
+    var replayPeak: Float?
 
     /// 初始化曲目
     init(
@@ -26,7 +28,9 @@ struct Track: Identifiable, Codable, Equatable {
         artist: String? = nil,
         album: String? = nil,
         duration: TimeInterval = 0,
-        artworkData: Data? = nil
+        artworkData: Data? = nil,
+        replayGainDB: Float? = nil,
+        replayPeak: Float? = nil
     ) {
         self.id = id
         self.url = url
@@ -35,6 +39,8 @@ struct Track: Identifiable, Codable, Equatable {
         self.album = album
         self.duration = duration
         self.artworkData = artworkData
+        self.replayGainDB = replayGainDB
+        self.replayPeak = replayPeak
     }
 
     /// 从文件 URL 创建曲目
@@ -53,6 +59,8 @@ struct Track: Identifiable, Codable, Equatable {
         var artist: String?
         var album: String?
         var artworkData: Data?
+        var replayGainDB: Float?
+        var replayPeak: Float?
 
         for item in metadata {
             guard let key = item.commonKey?.rawValue,
@@ -79,6 +87,9 @@ struct Track: Identifiable, Codable, Equatable {
         if artworkData == nil {
             artworkData = await Self.embeddedArtwork(from: asset)
         }
+        let gain = await Self.embeddedReplayGain(from: asset)
+        replayGainDB = gain.db
+        replayPeak = gain.peak
 
         // 获取时长
         let duration = try? await asset.load(.duration).seconds
@@ -89,7 +100,9 @@ struct Track: Identifiable, Codable, Equatable {
             artist: artist,
             album: album,
             duration: duration ?? 0,
-            artworkData: artworkData
+            artworkData: artworkData,
+            replayGainDB: replayGainDB,
+            replayPeak: replayPeak
         )
     }
 
@@ -116,6 +129,34 @@ struct Track: Identifiable, Codable, Equatable {
         return nil
     }
 
+    /// 读取 replaygain_track_gain / replaygain_track_peak。增益单位是 dB。
+    private static func embeddedReplayGain(from asset: AVAsset) async -> (db: Float?, peak: Float?) {
+        guard let formats = try? await asset.load(.availableMetadataFormats) else { return (nil, nil) }
+        var gainDB: Float?
+        var peak: Float?
+
+        for format in formats {
+            guard let items = try? await asset.loadMetadata(for: format) else { continue }
+            for item in items {
+                let key = ((item.key as? String) ?? item.identifier?.rawValue ?? "").lowercased()
+                guard let text = try? await item.load(.stringValue) else { continue }
+                let lower = text.lowercased()
+                if key.contains("replaygain_track_gain") || lower.contains("replaygain_track_gain") {
+                    gainDB = firstNumber(in: text)
+                } else if key.contains("replaygain_track_peak") || lower.contains("replaygain_track_peak") {
+                    peak = firstNumber(in: text)
+                }
+            }
+        }
+        return (gainDB, peak)
+    }
+
+    private static func firstNumber(in text: String) -> Float? {
+        let pattern = #"-?\d+(?:\.\d+)?"#
+        guard let match = text.range(of: pattern, options: .regularExpression) else { return nil }
+        return Float(text[match])
+    }
+
     /// 显示名称（用于列表显示）
     var displayName: String {
         if let artist = artist {
@@ -132,7 +173,7 @@ struct Track: Identifiable, Codable, Equatable {
     // MARK: - Codable
 
     enum CodingKeys: String, CodingKey {
-        case id, url, title, artist, album, duration, artworkData
+        case id, url, title, artist, album, duration, artworkData, replayGainDB, replayPeak
     }
 
     init(from decoder: Decoder) throws {
@@ -144,6 +185,21 @@ struct Track: Identifiable, Codable, Equatable {
         album = try container.decodeIfPresent(String.self, forKey: .album)
         duration = try container.decode(TimeInterval.self, forKey: .duration)
         artworkData = try container.decodeIfPresent(Data.self, forKey: .artworkData)
+        replayGainDB = try container.decodeIfPresent(Float.self, forKey: .replayGainDB)
+        replayPeak = try container.decodeIfPresent(Float.self, forKey: .replayPeak)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(url, forKey: .url)
+        try container.encode(title, forKey: .title)
+        try container.encodeIfPresent(artist, forKey: .artist)
+        try container.encodeIfPresent(album, forKey: .album)
+        try container.encode(duration, forKey: .duration)
+        try container.encodeIfPresent(artworkData, forKey: .artworkData)
+        try container.encodeIfPresent(replayGainDB, forKey: .replayGainDB)
+        try container.encodeIfPresent(replayPeak, forKey: .replayPeak)
     }
 }
 

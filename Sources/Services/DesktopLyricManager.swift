@@ -21,19 +21,26 @@ class DesktopLyricManager: ObservableObject {
 
     // MARK: - Private Properties
 
+    static let contentSize = NSSize(width: 860, height: 120)
+
     private var window: DesktopLyricWindow?
-    private var hostingView: NSHostingView<AnyView>?
 
     // MARK: - Window Management
 
     /// 显示桌面歌词
     func show() {
         if window == nil {
-            window = DesktopLyricWindow()
-            updateContent()
+            let panel = DesktopLyricWindow(contentSize: Self.contentSize)
+            let host = NSHostingView(rootView: DesktopLyricBar(model: self))
+            host.sizingOptions = []
+            panel.contentView = host
+            window = panel
+            placeWindow()
+        } else if let frame = window?.frame, frame.width < 480 || frame.height < 80 {
+            placeWindow()
         }
 
-        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
         window?.setDraggable(true)
         isVisible = true
     }
@@ -59,7 +66,6 @@ class DesktopLyricManager: ObservableObject {
     func update(line: String, progress: Double = 0.0) {
         self.currentLine = line
         self.progress = progress
-        updateContent()
     }
 
     /// 更新双行歌词
@@ -67,30 +73,37 @@ class DesktopLyricManager: ObservableObject {
         self.currentLine = currentLine
         self.nextLine = nextLine
         self.progress = progress
-        updateContent()
     }
 
-    private func updateContent() {
-        guard let window = window else { return }
+    /// 放到屏幕底部居中。上次若被收成小弹框，丢掉那个尺寸。
+    private func placeWindow() {
+        guard let window else { return }
 
-        let content: AnyView
+        let savedWidth = UserDefaults.standard.double(forKey: "desktopLyric.width")
+        let savedHeight = UserDefaults.standard.double(forKey: "desktopLyric.height")
+        let savedX = UserDefaults.standard.double(forKey: "desktopLyric.x")
+        let savedY = UserDefaults.standard.double(forKey: "desktopLyric.y")
 
-        if useKaraokeEffect {
-            content = AnyView(
-                KaraokeLyricView(line: currentLine, progress: progress)
+        if savedWidth >= 480, savedHeight >= 80 {
+            window.setFrame(
+                NSRect(x: savedX, y: savedY, width: savedWidth, height: savedHeight),
+                display: true
             )
-        } else {
-            content = AnyView(
-                DesktopLyricView(line: currentLine)
-            )
+            return
         }
 
-        if hostingView == nil {
-            hostingView = NSHostingView(rootView: content)
-            window.contentView = hostingView
-        } else {
-            hostingView?.rootView = content
-        }
+        let screen = window.screen ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let size = Self.contentSize
+        window.setFrame(
+            NSRect(
+                x: visible.midX - size.width / 2,
+                y: visible.minY + 72,
+                width: size.width,
+                height: size.height
+            ),
+            display: true
+        )
     }
 
     // MARK: - Position Management
@@ -108,21 +121,7 @@ class DesktopLyricManager: ObservableObject {
 
     /// 恢复窗口位置
     func restorePosition() {
-        guard let window = window else { return }
-
-        let x = UserDefaults.standard.double(forKey: "desktopLyric.x")
-        let y = UserDefaults.standard.double(forKey: "desktopLyric.y")
-        let width = UserDefaults.standard.double(forKey: "desktopLyric.width")
-        let height = UserDefaults.standard.double(forKey: "desktopLyric.height")
-
-        if width > 0 && height > 0 {
-            window.setFrame(
-                NSRect(x: x, y: y, width: width, height: height),
-                display: true
-            )
-        } else {
-            window.center()
-        }
+        placeWindow()
     }
 }
 
@@ -132,7 +131,9 @@ extension DesktopLyricManager {
     /// 加载设置
     func loadSettings() {
         isVisible = UserDefaults.standard.bool(forKey: "desktopLyric.visible")
-        useKaraokeEffect = UserDefaults.standard.bool(forKey: "desktopLyric.karaoke")
+        if UserDefaults.standard.object(forKey: "desktopLyric.karaoke") != nil {
+            useKaraokeEffect = UserDefaults.standard.bool(forKey: "desktopLyric.karaoke")
+        }
 
         if isVisible {
             show()

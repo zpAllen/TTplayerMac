@@ -26,12 +26,6 @@ struct ClassicEqualizerWindow: View {
                     .toggleStyle(.switch)
                     .labelsHidden()
                     .scaleEffect(0.7)
-
-                Button("×") {
-                    // 关闭窗口
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(TTPlayerClassicColors.primaryText)
             }
             .padding(.horizontal, 8)
             .frame(height: 24)
@@ -78,10 +72,12 @@ struct ClassicEqualizerWindow: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(TTPlayerClassicColors.mainBackground)
         }
-        .frame(width: 450, height: 200)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(TTPlayerClassicColors.mainBackground)
     }
 }
 
@@ -90,44 +86,70 @@ struct EqualizerBandView: View {
     let band: EqualizerBand
     let onGainChange: (Float) -> Void
 
-    @State private var gain: Float
-
-    init(band: EqualizerBand, onGainChange: @escaping (Float) -> Void) {
-        self.band = band
-        self.onGainChange = onGainChange
-        self._gain = State(initialValue: band.gain)
-    }
-
     var body: some View {
         VStack(spacing: 4) {
-            // 增益显示
-            Text(String(format: "%+.0f", gain))
+            Text(String(format: "%+.0f", band.gain))
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(TTPlayerClassicColors.secondaryText)
-                .frame(height: 14)
+                .frame(height: 12)
 
-            // 滑块
-            Slider(
+            VerticalGainSlider(
                 value: Binding(
-                    get: { gain },
-                    set: { newValue in
-                        gain = newValue
-                        onGainChange(newValue)
-                    }
-                ),
-                in: -12...12
+                    get: { band.gain },
+                    set: { onGainChange($0) }
+                )
             )
-            .rotationEffect(.degrees(-90))
-            .frame(width: 100, height: 20)
-            .tint(TTPlayerClassicColors.accent)
+            .frame(height: 140)
 
-            // 频率标签
             Text(band.displayFrequency)
                 .font(.system(size: 9))
                 .foregroundColor(TTPlayerClassicColors.tertiaryText)
                 .frame(height: 14)
         }
-        .frame(width: 32)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// 竖直增益滑条，0 dB 在中线。直接读写模型，切预设时数字和滑块一起变。
+struct VerticalGainSlider: View {
+    @Binding var value: Float
+
+    var body: some View {
+        GeometryReader { geometry in
+            let height = geometry.size.height
+            let knobY = yPosition(for: value, height: height)
+
+            ZStack {
+                Rectangle()
+                    .fill(TTPlayerClassicColors.accent.opacity(0.35))
+                    .frame(height: 1)
+                    .position(x: geometry.size.width / 2, y: height / 2)
+
+                Capsule()
+                    .fill(Color.black.opacity(0.65))
+                    .frame(width: 4, height: height)
+
+                Circle()
+                    .fill(TTPlayerClassicColors.primaryText)
+                    .overlay(Circle().stroke(TTPlayerClassicColors.accent, lineWidth: 1))
+                    .frame(width: 10, height: 10)
+                    .position(x: geometry.size.width / 2, y: knobY)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        let ratio = 1 - min(1, max(0, gesture.location.y / max(height, 1)))
+                        value = Float(ratio) * 24 - 12
+                    }
+            )
+        }
+    }
+
+    private func yPosition(for gain: Float, height: CGFloat) -> CGFloat {
+        let clamped = min(12, max(-12, gain))
+        let ratio = CGFloat((clamped + 12) / 24)
+        return height * (1 - ratio)
     }
 }
 

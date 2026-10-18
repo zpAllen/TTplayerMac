@@ -10,17 +10,22 @@ import UniformTypeIdentifiers
 
 /// 文件打开工具
 struct FileOpener {
-    /// 打开音频文件
+    static let audioExtensions: Set<String> = [
+        "mp3", "m4a", "aac", "wav", "aiff", "flac", "alac", "ape", "ogg"
+    ]
+
+    /// 打开音频文件或文件夹，可以多选。文件夹会展开成其中的音频文件。
     static func openAudioFiles(completion: @escaping ([URL]) -> Void) {
         let panel = NSOpenPanel()
-        panel.message = "选择音频文件"
+        panel.message = "选择音频文件或文件夹，可多选"
         panel.prompt = "打开"
         panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.allowedContentTypes = [
+            .folder,
             .mp3,
-            .mpeg4Audio,  // AAC, M4A
+            .mpeg4Audio,
             .wav,
             .aiff,
             UTType(filenameExtension: "flac") ?? .audio,
@@ -96,7 +101,9 @@ extension View {
 
                     // 检查是否是音频文件
                     let ext = url.pathExtension.lowercased()
-                    if ["mp3", "m4a", "aac", "wav", "aiff", "flac", "ape", "ogg"].contains(ext) {
+                    var isDirectory: ObjCBool = false
+                    let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+                    if exists && (isDirectory.boolValue || FileOpener.audioExtensions.contains(ext)) {
                         urls.append(url)
                     }
                 }

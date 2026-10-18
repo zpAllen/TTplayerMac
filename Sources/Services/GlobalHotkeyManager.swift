@@ -133,6 +133,8 @@ class GlobalHotkeyManager: ObservableObject {
         onVolumeDown: @escaping () -> Void,
         onShowLyrics: @escaping () -> Void
     ) {
+        unregisterAll()
+
         // Cmd+Option+P: 播放/暂停
         register(
             key: UInt32(kVK_ANSI_P),

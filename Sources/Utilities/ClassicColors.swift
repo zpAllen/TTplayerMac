@@ -11,19 +11,32 @@ import SwiftUI
 enum TTPlayerClassicColors {
     // MARK: - 背景色
 
-    /// 主背景：深黑色 #1A1A1A
-    static let mainBackground = Color(hex: "#1A1A1A")
+    /// 主背景：钢蓝黑，接近千千静听默认窗体
+    static let mainBackground = Color(hex: "#1B242C")
 
-    /// 次要背景：深灰色 #2B2B2B（歌曲信息区）
-    static let secondaryBackground = Color(hex: "#2B2B2B")
+    /// 频谱区：纯黑
+    static let spectrumBackground = Color(hex: "#000000")
 
-    /// 控制栏背景：灰色 #3A3A3A
-    static let controlBackground = Color(hex: "#3A3A3A")
+    /// 标题栏
+    static let titleBar = Color(hex: "#3A4C5C")
+
+    /// 次要背景：歌曲信息、进度槽
+    static let secondaryBackground = Color(hex: "#24303A")
+
+    /// 控制栏背景
+    static let controlBackground = Color(hex: "#31404C")
+
+    /// 列表当前行
+    static let listSelection = Color(hex: "#2F6FA8")
+
+    /// 按钮高光 / 暗边
+    static let bevelLight = Color.white.opacity(0.22)
+    static let bevelDark = Color.black.opacity(0.55)
 
     // MARK: - 强调色
 
-    /// 强调色：经典蓝色 #5BC0DE（进度条、高亮）
-    static let accent = Color(hex: "#5BC0DE")
+    /// 强调色：进度与当前行高亮
+    static let accent = Color(hex: "#6FD4EE")
 
     /// 强调色深色版 #3A9FBD
     static let accentDark = Color(hex: "#3A9FBD")

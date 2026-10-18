@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import AVFoundation
 
 /// 歌词搜索引擎
 class LyricSearchEngine {
@@ -124,8 +125,12 @@ class LyricSearchEngine {
 
     // MARK: - Auto Load
 
-    /// 自动加载歌词（异步）
+    /// 自动加载歌词。先读文件里的内嵌歌词，没有再找同名 LRC。
     func autoLoadLyrics(for track: Track) async -> LyricDocument? {
+        if let embedded = await embeddedLyrics(for: track.url), !embedded.lines.isEmpty {
+            return embedded
+        }
+
         let results = searchLocalLyrics(for: track)
 
         guard let bestMatch = results.first else {
@@ -134,6 +139,42 @@ class LyricSearchEngine {
 
         let document = LyricDocument()
         try? document.parse(url: bestMatch)
-        return document
+        return document.lines.isEmpty ? nil : document
+    }
+
+    /// 读取 ID3 USLT、iTunes 歌词等内嵌文本。这些歌里的 USLT 本身就是 LRC。
+    private func embeddedLyrics(for url: URL) async -> LyricDocument? {
+        let asset = AVURLAsset(url: url)
+        guard let formats = try? await asset.load(.availableMetadataFormats) else { return nil }
+
+        for format in formats {
+            guard let items = try? await asset.loadMetadata(for: format) else { continue }
+            for item in items {
+                guard Self.isLyricTag(item) else { continue }
+                guard let text = try? await item.load(.stringValue) else { continue }
+                let normalized = text
+                    .replacingOccurrences(of: "\r\n", with: "\n")
+                    .replacingOccurrences(of: "\r", with: "\n")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !normalized.isEmpty else { continue }
+
+                let document = LyricDocument()
+                document.parse(content: normalized)
+                if !document.lines.isEmpty {
+                    return document
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private static func isLyricTag(_ item: AVMetadataItem) -> Bool {
+        let identifier = item.identifier?.rawValue.lowercased() ?? ""
+        let key = ((item.key as? String) ?? "").lowercased()
+        if identifier.contains("uslt") || identifier.contains("sylt") || identifier.contains("lyrics") {
+            return true
+        }
+        return key == "uslt" || key == "sylt" || key == "lyrics" || key == "©lyr"
     }
 }

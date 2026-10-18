@@ -28,6 +28,7 @@ class SpectrumAnalyzer: ObservableObject {
     // 平滑处理
     private let smoothingFactor: Float = 0.7
     private var previousData: [Float]
+    private var sampleRate: Float = 44100
 
     // MARK: - Initialization
 
@@ -46,12 +47,29 @@ class SpectrumAnalyzer: ObservableObject {
 
     // MARK: - Analysis
 
-    /// 分析音频缓冲区
+    /// 清空柱状图。停止播放时调用，避免静音噪声撑满频谱。
+    func reset() {
+        previousData = Array(repeating: 0, count: binCount)
+        spectrumData = previousData
+    }
+
+    /// 分析音频缓冲区。FFT 在音频线程算，结果回到主线程再发布。
     func analyze(buffer: AVAudioPCMBuffer) {
         guard let channelData = buffer.floatChannelData else { return }
 
+        var rms: Float = 0
+        vDSP_rmsqv(channelData[0], 1, &rms, vDSP_Length(min(bufferSize, Int(buffer.frameLength))))
+        if rms < 0.0008 {
+            DispatchQueue.main.async { [weak self] in
+                self?.reset()
+            }
+            return
+        }
+
         let frameLength = Int(buffer.frameLength)
         guard frameLength >= bufferSize else { return }
+
+        sampleRate = Float(buffer.format.sampleRate)
 
         // 应用汉明窗
         var windowed = [Float](repeating: 0, count: bufferSize)
@@ -118,12 +136,20 @@ class SpectrumAnalyzer: ObservableObject {
             newData[index] = normalized
         }
 
-        // 平滑处理（惯性）
-        for i in 0..<binCount {
-            spectrumData[i] = previousData[i] * smoothingFactor + newData[i] * (1 - smoothingFactor)
+        let snapshot = newData
+        DispatchQueue.main.async { [weak self] in
+            self?.publish(snapshot)
         }
+    }
 
-        previousData = spectrumData
+    /// 惯性平滑后发布。只在主线程写 @Published。
+    private func publish(_ newData: [Float]) {
+        var smoothed = newData
+        for i in 0..<binCount {
+            smoothed[i] = previousData[i] * smoothingFactor + newData[i] * (1 - smoothingFactor)
+        }
+        previousData = smoothed
+        spectrumData = smoothed
     }
 
     /// 计算对数分布的频率范围
@@ -155,7 +181,7 @@ class SpectrumAnalyzer: ObservableObject {
 
     /// 频率转 FFT bin 索引
     private func frequencyToBin(_ frequency: Float) -> Float {
-        let sampleRate: Float = 44100.0  // 标准采样率
-        return frequency * Float(bufferSize) / sampleRate
+        let rate = sampleRate > 0 ? sampleRate : 44100
+        return frequency * Float(bufferSize) / rate
     }
 }

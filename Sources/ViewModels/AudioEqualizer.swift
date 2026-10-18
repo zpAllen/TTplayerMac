@@ -27,6 +27,7 @@ struct EqualizerBand: Identifiable {
 /// 均衡器预设
 enum EqualizerPreset: String, CaseIterable {
     case off = "关闭"
+    case custom = "自定义"
     case rock = "摇滚"
     case pop = "流行"
     case jazz = "爵士"
@@ -37,9 +38,12 @@ enum EqualizerPreset: String, CaseIterable {
     case bass = "重低音"
     case treble = "高音增强"
 
-    /// 预设的增益值（10个频段）
-    var gains: [Float] {
+    /// 预设的增益值（10个频段）；没有固定曲线的预设返回 nil
+    var gains: [Float]? {
         switch self {
+        case .custom:
+            // .custom 没有固定曲线，applyPreset 会直接跳过
+            return nil
         case .off:
             return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         case .rock:
@@ -130,27 +134,30 @@ class AudioEqualizer: ObservableObject {
     func setBandGain(index: Int, gain: Float) {
         guard index >= 0 && index < bands.count else { return }
 
-        // 限制范围 ±12 dB
+        applyGain(index: index, gain: gain)
+
+        // 手动调整后进入自定义状态，保留当前曲线
+        currentPreset = .custom
+    }
+
+    /// 写入单个频段增益（含 ±12 dB 限幅），供手动设置、预设应用与设置恢复共用
+    private func applyGain(index: Int, gain: Float) {
         let clampedGain = max(-12, min(12, gain))
 
         eq.bands[index].gain = clampedGain
         bands[index].gain = clampedGain
-
-        // 如果手动调整，切换到自定义预设
-        if currentPreset != .off {
-            currentPreset = .off
-        }
     }
 
     /// 应用预设
     func applyPreset(_ preset: EqualizerPreset) {
         currentPreset = preset
-        let gains = preset.gains
+
+        // 自定义状态由手动拖动维护，不覆盖曲线也不改变开关
+        guard let gains = preset.gains else { return }
 
         for (index, gain) in gains.enumerated() {
             guard index < bands.count else { break }
-            eq.bands[index].gain = gain
-            bands[index].gain = gain
+            applyGain(index: index, gain: gain)
         }
 
         isEnabled = preset != .off
@@ -174,16 +181,23 @@ class AudioEqualizer: ObservableObject {
 
     /// 加载设置
     func loadSettings() {
-        isEnabled = UserDefaults.standard.bool(forKey: "equalizer.enabled")
+        let savedEnabled = UserDefaults.standard.bool(forKey: "equalizer.enabled")
+        let savedPreset = UserDefaults.standard.string(forKey: "equalizer.preset")
+            .flatMap { EqualizerPreset(rawValue: $0) }
 
-        if let presetName = UserDefaults.standard.string(forKey: "equalizer.preset"),
-           let preset = EqualizerPreset(rawValue: presetName) {
-            applyPreset(preset)
-        } else if let gainValues = UserDefaults.standard.array(forKey: "equalizer.gains") as? [Float],
-                  gainValues.count == bands.count {
+        if savedPreset == .custom || savedPreset == nil,
+           let gainValues = UserDefaults.standard.array(forKey: "equalizer.gains") as? [Float],
+           gainValues.count == bands.count {
+            // 恢复自定义曲线
             for (index, gain) in gainValues.enumerated() {
-                setBandGain(index: index, gain: gain)
+                applyGain(index: index, gain: gain)
             }
+            currentPreset = .custom
+        } else if let preset = savedPreset, preset != .custom {
+            applyPreset(preset)
         }
+
+        // applyPreset 会按预设改写开关，这里以保存的开关状态为准
+        isEnabled = savedEnabled
     }
 }

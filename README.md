@@ -1,131 +1,152 @@
 # TTPlayer for macOS
 
-> 千千静听 macOS 版 - 重现经典，致敬情怀
+> 千千静听 macOS 版。按 Windows 版 TTPlayer 5.7 的播放逻辑和界面习惯，用 Swift 重写。
 
-## 项目简介
+仓库：<https://github.com/zpAllen/TTplayerMac>
 
-基于对 TTPlayer v5.7.9 (Windows) 的逆向分析，使用 Swift + SwiftUI 重构的 macOS 原生版本。
+最低系统：**macOS 14**。界面按 Apple 芯片编译；Intel Mac 需要按文末打通用包。
 
-**设计理念：**
-- 保留 Windows 经典 UI 风格
-- 使用现代 macOS 技术栈
-- 专注核心音乐播放功能
+**维护约定：** 播放、歌词、封面、列表、均衡器、快捷键或打包方式有变化时，同步改下面的「功能」和「使用方法」。不要把 README 留在旧行为上。
 
-## 功能特性
+## 功能
 
-### 已实现 ✅
-- [ ] 基础音频播放（AVFoundation）
-- [ ] LRC 歌词解析与同步
-- [ ] 经典 UI 界面
-- [ ] 频谱可视化
+- 播放 MP3、M4A、AAC、WAV、AIFF、FLAC、ALAC、APE、OGG。可多选文件，也可以选整个文件夹（含子目录）。
+- 播放、暂停、停止、上一首、下一首、进度拖动、音量、静音。
+- 播放模式：顺序、列表循环、单曲循环、随机。上一首 / 下一首始终按列表左右切歌。单曲循环只在一首播完后重播当前这首。
+- 还没有播过任何歌时，点播放会从列表里随机挑一首。已经在播或暂停过，则接着当前这首。
+- 列表可搜索、删除、排序、清空，退出后记住曲目和播放模式。文件可以拖进窗口。
+- 频谱使用正在播放的声音。停止时频谱是空的。
+- 有封面时显示在频谱左侧（ID3 APIC 等）。没有封面时频谱铺满。
+- 歌词优先用文件内嵌内容（例如 MP3 的 ID3 USLT，内容可以是 LRC）。没有内嵌歌词时，再找歌曲同目录和 `~/Music/Lyrics` 里的 `.lrc`。
+- 歌词窗口可以给当前歌曲指定一个 LRC，并记住。下次播放这首歌仍用这个文件。支持 UTF-8 和 GB18030。
+- 桌面歌词在屏幕底部，已唱部分从左向右变绿。没有歌词时显示「暂无歌词」。
+- 十段均衡器，带预设。手动拖动频段会进入「自定义」，不会把曲线清掉。
+- 窗口可置顶。列表可以收起，收起后窗口高度回到播放器本身。
 
-### 计划中 🔄
-- [ ] 全局快捷键
-- [ ] 播放列表管理
-- [ ] 桌面歌词
-- [ ] 在线歌词搜索
-- [ ] 均衡器
+尚未做：在线搜歌词、格式转换、音乐库、原版皮肤位图。
 
-## 技术栈
+## 使用方法
 
-- **语言：** Swift 5.9+
-- **框架：** SwiftUI, AVFoundation, AppKit
-- **最低系统：** macOS 14.0+
-- **开发工具：** Xcode 15+
+打开后从控制栏的文件夹按钮，或菜单「文件 → 打开音乐文件或文件夹」（Command+O），选文件或目录。也可以把文件、文件夹拖进窗口。
 
-## 项目结构
+控制栏从左到右：上一首、播放/暂停、停止、下一首、打开、音量、播放模式、列表、歌词、均衡器、桌面歌词。标题栏右侧是置顶、最小化和退出。
 
-```
-TTPlayer-macOS/
-├── Sources/
-│   ├── App/                    # 应用入口
-│   │   ├── TTPlayerApp.swift
-│   │   └── AppDelegate.swift
-│   ├── Models/                 # 数据模型
-│   │   ├── Track.swift
-│   │   ├── Playlist.swift
-│   │   └── LyricDocument.swift
-│   ├── Views/                  # 界面组件
-│   │   ├── Classic/           # 经典 UI 风格
-│   │   │   ├── ClassicMainWindow.swift
-│   │   │   ├── ClassicLyricWindow.swift
-│   │   │   ├── ClassicPlaylistView.swift
-│   │   │   ├── SpectrumView.swift
-│   │   │   └── ClassicProgressBar.swift
-│   │   └── Components/        # 通用组件
-│   ├── ViewModels/            # 业务逻辑
-│   │   ├── AudioPlayer.swift
-│   │   ├── PlaylistManager.swift
-│   │   └── LyricSyncEngine.swift
-│   ├── Services/              # 服务层
-│   │   ├── LyricSearchEngine.swift
-│   │   └── AudioAnalyzer.swift
-│   └── Utilities/             # 工具类
-│       ├── LRCParser.swift
-│       ├── Extensions.swift
-│       └── ClassicColors.swift
-├── Resources/
-│   └── Assets.xcassets/
-└── Tests/
-```
+| 操作 | 做法 |
+| --- | --- |
+| 播放 / 暂停 | 播放按钮，或空格 |
+| 停止 | 方块按钮，或 Command+S。再点播放从这首开头开始 |
+| 上一首 / 下一首 | 左右箭头按钮，或 Command+左右方向键 |
+| 音量 | 滑条，或 Command+上下方向键。Command+M 静音 |
+| 播放模式 | 点「顺序 / 列表 / 单曲 / 随机」循环切换 |
+| 显示或收起列表 | 列表按钮，或 Command+Shift+P |
+| 歌词窗口 | 歌词按钮，或 Command+L |
+| 指定这首歌的 LRC | 歌词窗口右上角「指定歌词」 |
+| 桌面歌词 | 「桌词」，或 Command+Shift+D |
+| 均衡器 | 均衡器按钮，或 Command+E |
+| 总在最前 | 标题栏「顶」 |
 
-## 开发路线图
+全局快捷键需要辅助功能权限（系统设置 → 隐私与安全性 → 辅助功能）：
 
-### MVP 阶段（2周）
-**Week 1:**
-- [x] 项目架构搭建
-- [ ] 音频播放引擎
-- [ ] 基础 UI 框架
-- [ ] 播放控制
+| 快捷键 | 作用 |
+| --- | --- |
+| Command+Option+P | 播放 / 暂停 |
+| Command+Option+左 / 右 | 上一首 / 下一首 |
+| Command+Option+上 / 下 | 音量减 / 加 |
+| Command+Option+L | 桌面歌词 |
 
-**Week 2:**
-- [ ] LRC 解析器
-- [ ] 歌词同步引擎
-- [ ] 歌词窗口
-- [ ] 播放列表
+没有权限时，窗口里的按钮和菜单仍然可用。
 
-### 完善阶段（4周）
-- [ ] 频谱可视化
-- [ ] 全局快捷键
-- [ ] 桌面歌词
-- [ ] 均衡器
-- [ ] 配置持久化
+## 本地开发
 
-## 构建与运行
+需要 Swift 5.9 或更新（Xcode 15+ 自带的工具链即可）。仓库是 Swift Package，没有 Xcode 工程。
 
 ```bash
-# 克隆项目
-git clone <repo-url>
-cd TTPlayer-macOS
+git clone https://github.com/zpAllen/TTplayerMac.git
+cd TTplayerMac
 
-# 使用 Xcode 打开
-open TTPlayer.xcodeproj
-
-# 或使用命令行构建
-xcodebuild -scheme TTPlayer -configuration Debug
+# 编译调试版并在终端启动，日志直接打在这个窗口
+swift build
+.build/debug/TTPlayer
 ```
 
-## 逆向分析文档
+改完代码后先退出正在运行的程序，再执行上面两条。同时开着旧进程时，看到的仍是上一次编译的界面。
 
-详细的 Windows 版逆向分析报告：
-- [歌词解析分析](../TTPlayer/ReverseNotes/01_LyricParsing.md)
-- [LRC 解析器详解](../TTPlayer/ReverseNotes/02_LRC_Parser_Analysis.md)
-- [macOS 重构架构](../TTPlayer/docs/macOS_Refactoring_Architecture.md)
+发布用的优化构建：
 
-## 参考资料
+```bash
+swift build -c release
+```
 
-- [千千静听官网（历史）](http://www.ttplayer.com/)
-- [LRC 歌词格式规范](https://en.wikipedia.org/wiki/LRC_(file_format))
-- [AVFoundation 官方文档](https://developer.apple.com/av-foundation/)
+可执行文件在 `.build/arm64-apple-macosx/release/TTPlayer`。这是命令行程序，不要把这个文件直接发给别人。
 
-## 致谢
+## 打包给别人使用
 
-感谢千千静听（TTPlayer）为我们带来的美好回忆。
+打成 `TTPlayer.app` 再压缩。本机没有 Apple 开发者证书时，只能临时签名。对方第一次打开从网络下载的应用，需要右键「打开」，不能直接双击。
+
+Apple 芯片：
+
+```bash
+swift build -c release
+
+APP="TTPlayer.app"
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS"
+
+cp .build/arm64-apple-macosx/release/TTPlayer "$APP/Contents/MacOS/TTPlayer"
+
+cat > "$APP/Contents/Info.plist" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>TTPlayer</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.ttplayer.macos</string>
+  <key>CFBundleName</key>
+  <string>千千静听</string>
+  <key>CFBundleDisplayName</key>
+  <string>千千静听</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+EOF
+
+codesign --force --sign - "$APP"
+ditto -c -k --keepParent "$APP" TTPlayer.zip
+```
+
+把 `TTPlayer.zip` 发出去。对方解压后把 `TTPlayer.app` 拖进「应用程序」。
+
+Intel 与 Apple 芯片都能跑的包，编译改成：
+
+```bash
+swift build -c release --arch arm64 --arch x86_64
+```
+
+复制 `.build/apple-macosx/release/TTPlayer`，不要用 `arm64-apple-macosx` 下面那个。
+
+## 源码布局
+
+```
+Sources/
+├── App/            # 入口、菜单
+├── Models/         # 曲目、列表、LRC
+├── ViewModels/     # 播放、均衡器、频谱、歌词同步
+├── Views/Classic/  # 主窗口、列表、歌词、均衡器、桌面歌词
+├── Services/       # 歌词查找、桌面歌词、全局快捷键
+└── Utilities/      # 配色、文件选择
+```
 
 ## 许可
 
 本项目仅供学习和研究使用。
-
----
-
-**开发日志：** 2026-10-17 项目启动

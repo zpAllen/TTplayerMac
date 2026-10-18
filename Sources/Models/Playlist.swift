@@ -47,16 +47,31 @@ class Playlist: ObservableObject, Codable {
         return tracks[currentIndex]
     }
 
-    /// 下一曲
+    /// 手动上一首 / 下一首：沿列表左右移动，不受单曲循环影响
     @discardableResult
-    func next() -> Track? {
+    func skip(by step: Int) -> Track? {
+        guard !tracks.isEmpty else { return nil }
+        let index = currentIndex + step
+        guard index >= 0 && index < tracks.count else { return nil }
+        currentIndex = index
+        return currentTrack
+    }
+
+    /// 一首播完后的下一首。单曲循环留在当前首，顺序播放到末尾则停止。
+    @discardableResult
+    func trackAfterFinishing() -> Track? {
+        guard !tracks.isEmpty else { return nil }
+
         switch playMode {
+        case .repeatOne:
+            return currentTrack
+
         case .sequential:
-            if currentIndex < tracks.count - 1 {
-                currentIndex += 1
-            } else {
-                return nil  // 列表结束
-            }
+            guard currentIndex < tracks.count - 1 else { return nil }
+            currentIndex += 1
+
+        case .repeatAll:
+            currentIndex = (currentIndex + 1) % tracks.count
 
         case .shuffle:
             if shuffleIndices.isEmpty {
@@ -66,45 +81,21 @@ class Playlist: ObservableObject, Codable {
                 let nextShuffleIndex = (currentShuffleIndex + 1) % shuffleIndices.count
                 currentIndex = shuffleIndices[nextShuffleIndex]
             }
-
-        case .repeatOne:
-            // 保持当前索引不变
-            break
-
-        case .repeatAll:
-            currentIndex = (currentIndex + 1) % tracks.count
         }
 
         return currentTrack
     }
 
-    /// 上一曲
+    /// 下一曲（手动）
+    @discardableResult
+    func next() -> Track? {
+        skip(by: 1)
+    }
+
+    /// 上一曲（手动）
     @discardableResult
     func previous() -> Track? {
-        switch playMode {
-        case .sequential:
-            if currentIndex > 0 {
-                currentIndex -= 1
-            }
-
-        case .shuffle:
-            if shuffleIndices.isEmpty {
-                generateShuffleIndices()
-            }
-            if let currentShuffleIndex = shuffleIndices.firstIndex(of: currentIndex) {
-                let prevShuffleIndex = (currentShuffleIndex - 1 + shuffleIndices.count) % shuffleIndices.count
-                currentIndex = shuffleIndices[prevShuffleIndex]
-            }
-
-        case .repeatOne:
-            // 保持当前索引不变
-            break
-
-        case .repeatAll:
-            currentIndex = (currentIndex - 1 + tracks.count) % tracks.count
-        }
-
-        return currentTrack
+        skip(by: -1)
     }
 
     /// 跳转到指定曲目
@@ -135,6 +126,34 @@ class Playlist: ObservableObject, Codable {
     /// 添加多个曲目
     func add(tracks: [Track]) {
         self.tracks.append(contentsOf: tracks)
+        if playMode == .shuffle {
+            generateShuffleIndices()
+        }
+    }
+
+    /// 按当前曲目身份排序，避免排序后 currentIndex 还指着旧位置
+    func sort(by areInIncreasingOrder: (Track, Track) -> Bool) {
+        let currentId = currentTrack?.id
+        tracks.sort(by: areInIncreasingOrder)
+        if let currentId, let newIndex = tracks.firstIndex(where: { $0.id == currentId }) {
+            currentIndex = newIndex
+        }
+    }
+
+    /// 移除选中曲目
+    func remove(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        let currentId = currentTrack?.id
+        tracks.removeAll { ids.contains($0.id) }
+
+        if tracks.isEmpty {
+            currentIndex = 0
+        } else if let currentId, let newIndex = tracks.firstIndex(where: { $0.id == currentId }) {
+            currentIndex = newIndex
+        } else {
+            currentIndex = min(currentIndex, tracks.count - 1)
+        }
+
         if playMode == .shuffle {
             generateShuffleIndices()
         }

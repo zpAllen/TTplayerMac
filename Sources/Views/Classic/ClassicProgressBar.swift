@@ -2,12 +2,11 @@
 //  ClassicProgressBar.swift
 //  TTPlayer for macOS
 //
-//  经典进度条组件
+//  经典进度条：左侧已播放时间，细槽，右侧总时长
 //
 
 import SwiftUI
 
-/// 经典进度条
 struct ClassicProgressBar: View {
     let current: TimeInterval
     let total: TimeInterval
@@ -21,76 +20,61 @@ struct ClassicProgressBar: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            // 当前时间
-            Text(formatTime(current))
+        HStack(spacing: 6) {
+            Text(formatTime(isDragging ? dragProgress * total : current))
                 .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(TTPlayerClassicColors.primaryText)
-                .frame(width: 40, alignment: .trailing)
+                .foregroundColor(TTPlayerClassicColors.accent)
+                .frame(width: 36, alignment: .trailing)
 
-            // 进度条
             GeometryReader { geometry in
+                let width = geometry.size.width
                 ZStack(alignment: .leading) {
-                    // 背景槽
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(TTPlayerClassicColors.progressBackground)
+                    Capsule()
+                        .fill(Color.black.opacity(0.55))
                         .frame(height: 4)
-
-                    // 已播放部分
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(TTPlayerClassicColors.progressGradient)
-                        .frame(
-                            width: geometry.size.width * progress,
-                            height: 4
-                        )
-
-                    // 拖动滑块
+                    Capsule()
+                        .fill(TTPlayerClassicColors.accent)
+                        .frame(width: max(0, width * progress), height: 4)
                     Circle()
                         .fill(TTPlayerClassicColors.primaryText)
-                        .frame(width: 10, height: 10)
-                        .shadow(color: .black.opacity(0.3), radius: 2)
-                        .offset(x: geometry.size.width * progress - 5)
-                        .gesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    isDragging = true
-                                    let newProgress = max(0, min(1, value.location.x / geometry.size.width))
-                                    dragProgress = newProgress
-                                }
-                                .onEnded { value in
-                                    isDragging = false
-                                    let newProgress = max(0, min(1, value.location.x / geometry.size.width))
-                                    let newTime = newProgress * total
-                                    onSeek?(newTime)
-                                }
-                        )
+                        .frame(width: 8, height: 8)
+                        .shadow(color: .black.opacity(0.4), radius: 1, y: 1)
+                        .offset(x: max(0, min(width - 8, width * progress - 4)))
                 }
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            isDragging = true
+                            dragProgress = max(0, min(1, value.location.x / max(width, 1)))
+                        }
+                        .onEnded { value in
+                            let ratio = max(0, min(1, value.location.x / max(width, 1)))
+                            isDragging = false
+                            onSeek?(ratio * total)
+                        }
+                )
             }
             .frame(height: 14)
 
-            // 总时长
             Text(formatTime(total))
                 .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(TTPlayerClassicColors.primaryText)
-                .frame(width: 40, alignment: .leading)
+                .foregroundColor(TTPlayerClassicColors.secondaryText)
+                .frame(width: 36, alignment: .leading)
         }
         .padding(.horizontal, 8)
+        .frame(height: PlayerMetrics.progress)
         .background(TTPlayerClassicColors.secondaryBackground)
     }
 }
 
-// MARK: - Preview
+enum PlayerMetrics {
+    static let title: CGFloat = 26
+    static let spectrum: CGFloat = 78
+    static let info: CGFloat = 20
+    static let progress: CGFloat = 22
+    static let controls: CGFloat = 36
 
-struct ClassicProgressBar_Previews: PreviewProvider {
-    static var previews: some View {
-        VStack(spacing: 20) {
-            ClassicProgressBar(current: 155, total: 263)
-            ClassicProgressBar(current: 0, total: 263)
-            ClassicProgressBar(current: 263, total: 263)
-        }
-        .frame(width: 327)
-        .padding()
-        .background(Color.black)
-        .preferredColorScheme(.dark)
-    }
+    static var chrome: CGFloat { title + spectrum + info + progress + controls }
 }

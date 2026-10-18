@@ -6,11 +6,12 @@
 //
 
 import SwiftUI
+import AppKit
 
 /// 经典歌词窗口视图
 struct ClassicLyricWindow: View {
     @ObservedObject var syncEngine: LyricSyncEngine
-    @State private var isEditing = false
+    @EnvironmentObject private var manager: PlaybackManager
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,7 +21,7 @@ struct ClassicLyricWindow: View {
             // 歌词显示区
             lyricScrollView
         }
-        .frame(width: 400, height: 500)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(TTPlayerClassicColors.mainBackground)
     }
 
@@ -34,25 +35,16 @@ struct ClassicLyricWindow: View {
 
             Spacer()
 
-            Button("编辑") {
-                isEditing.toggle()
+            Button("指定歌词") {
+                FileOpener.openLyricFile { url in
+                    guard let url else { return }
+                    manager.useLyricFile(url)
+                }
             }
             .buttonStyle(.plain)
             .font(.system(size: 10))
             .foregroundColor(TTPlayerClassicColors.accent)
-
-            Button("搜索") {
-                searchLyrics()
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 10))
-            .foregroundColor(TTPlayerClassicColors.accent)
-
-            Button("×") {
-                // 关闭窗口
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(TTPlayerClassicColors.primaryText)
+            .help("为当前歌曲选择一个 LRC 歌词文件")
         }
         .padding(.horizontal, 8)
         .frame(height: 24)
@@ -65,6 +57,15 @@ struct ClassicLyricWindow: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 20) {
+                    if let data = manager.player.currentTrack?.artworkData,
+                       let image = NSImage(data: data) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 180, height: 180)
+                            .padding(.top, 12)
+                    }
+
                     // 显示元数据
                     if let metadata = syncEngine.metadata {
                         metadataView(metadata)
@@ -125,11 +126,6 @@ struct ClassicLyricWindow: View {
         .padding(.bottom, 20)
     }
 
-    // MARK: - Actions
-
-    private func searchLyrics() {
-        // TODO: 实现在线搜索
-    }
 }
 
 // MARK: - Preview
@@ -137,6 +133,7 @@ struct ClassicLyricWindow: View {
 struct ClassicLyricWindow_Previews: PreviewProvider {
     static var previews: some View {
         ClassicLyricWindow(syncEngine: LyricSyncEngine())
+            .environmentObject(PlaybackManager())
             .preferredColorScheme(.dark)
     }
 }

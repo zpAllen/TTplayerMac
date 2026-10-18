@@ -35,7 +35,19 @@ class LyricDocument: ObservableObject {
     /// 解析 LRC 文件
     /// - Parameter url: LRC 文件 URL
     func parse(url: URL) throws {
-        let content = try String(contentsOf: url, encoding: .utf8)
+        let data = try Data(contentsOf: url)
+        if let content = String(data: data, encoding: .utf8) {
+            parse(content: content)
+            return
+        }
+        let gb18030 = String.Encoding(
+            rawValue: CFStringConvertEncodingToNSStringEncoding(
+                CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)
+            )
+        )
+        guard let content = String(data: data, encoding: gb18030) else {
+            throw CocoaError(.fileReadInapplicableStringEncoding)
+        }
         parse(content: content)
     }
 
@@ -61,6 +73,16 @@ class LyricDocument: ObservableObject {
 
         // 按时间排序
         lines.sort { $0.timestamp < $1.timestamp }
+
+        // 没有时间轴的内嵌歌词，整段作为一句显示
+        if lines.isEmpty {
+            let plain = contentLines
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            if !plain.isEmpty {
+                lines = [LRCLine(timestamp: 0, text: plain.joined(separator: "\n"))]
+            }
+        }
     }
 
     /// 解析元数据标签

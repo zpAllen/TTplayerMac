@@ -2,33 +2,28 @@
 //  DesktopLyricWindow.swift
 //  TTPlayer for macOS
 //
-//  桌面歌词窗口
+//  桌面歌词：屏幕底部的描边文字，没有歌词时也保持同样大小
 //
 
 import SwiftUI
 import AppKit
 
-/// 桌面歌词窗口（浮动、置顶、半透明）
+/// 桌面歌词窗口（浮动、置顶、透明）
 class DesktopLyricWindow: NSPanel {
-    init() {
+    init(contentSize: NSSize) {
         super.init(
-            contentRect: NSRect(x: 100, y: 100, width: 800, height: 120),
+            contentRect: NSRect(origin: .zero, size: contentSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
 
-        // 窗口属性
-        level = .floating  // 始终置顶
+        level = .floating
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
-
-        // 显示在所有空间
-        collectionBehavior = [.canJoinAllSpaces, .stationary]
-
-        // 初始居中
-        center()
+        hasShadow = false
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        hidesOnDeactivate = false
     }
 
     /// 设置是否可拖动
@@ -38,121 +33,77 @@ class DesktopLyricWindow: NSPanel {
     }
 }
 
-/// 桌面歌词视图（描边样式）
-struct DesktopLyricView: View {
-    let line: String
-    @State private var isDragging = false
+/// 桌面歌词条。尺寸固定，避免空歌词把窗口收成一个小弹框。
+struct DesktopLyricBar: View {
+    @ObservedObject var model: DesktopLyricManager
+
+    private var hasLyric: Bool {
+        !model.currentLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
-        ZStack {
-            // 描边效果（8方向）
-            ForEach(offsets, id: \.self) { offset in
-                Text(line)
-                    .font(.system(size: 48, weight: .bold, design: .rounded))
-                    .foregroundColor(.black)
-                    .offset(x: offset.x, y: offset.y)
-            }
-
-            // 主文字（白色）
-            Text(line)
-                .font(.system(size: 48, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
-                .shadow(color: .black.opacity(0.5), radius: 4)
-        }
-        .padding(30)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.ultraThinMaterial.opacity(0.5))
-        )
-        .onHover { hovering in
-            isDragging = hovering
-        }
-    }
-
-    // 8方向描边偏移
-    private let offsets: [CGPoint] = [
-        CGPoint(x: -2, y: -2),
-        CGPoint(x:  0, y: -2),
-        CGPoint(x:  2, y: -2),
-        CGPoint(x: -2, y:  0),
-        CGPoint(x:  2, y:  0),
-        CGPoint(x: -2, y:  2),
-        CGPoint(x:  0, y:  2),
-        CGPoint(x:  2, y:  2),
-    ]
-}
-
-/// 卡拉OK效果视图（逐字高亮）
-struct KaraokeLyricView: View {
-    let line: String
-    let progress: Double  // 0.0 ~ 1.0
-
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                // 底层：未播放部分（灰色描边）
-                outlinedText(line, color: .gray)
-
-                // 顶层：已播放部分（彩色渐变）
-                outlinedText(line, color: .clear)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.yellow, .orange, .pink],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .mask(
-                        Rectangle()
-                            .frame(width: geometry.size.width * progress)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    )
-            }
-        }
-        .padding(30)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.ultraThinMaterial.opacity(0.5))
-        )
-    }
-
-    @ViewBuilder
-    private func outlinedText(_ text: String, color: Color) -> some View {
-        ZStack {
-            // 描边
-            ForEach([-2, -1, 0, 1, 2], id: \.self) { x in
-                ForEach([-2, -1, 0, 1, 2], id: \.self) { y in
-                    if x != 0 || y != 0 {
-                        Text(text)
-                            .font(.system(size: 48, weight: .bold, design: .rounded))
-                            .foregroundColor(.black)
-                            .offset(x: CGFloat(x), y: CGFloat(y))
-                    }
-                }
-            }
-
-            // 主文字
-            Text(text)
-                .font(.system(size: 48, weight: .bold, design: .rounded))
-                .foregroundColor(color)
-        }
-    }
-}
-
-// MARK: - Preview
-
-struct DesktopLyricView_Previews: PreviewProvider {
-    static var previews: some View {
-        VStack(spacing: 40) {
-            DesktopLyricView(line: "对这个世界如果你有太多的抱怨")
-                .preferredColorScheme(.dark)
-
-            KaraokeLyricView(
-                line: "跌倒了就不敢继续往前走",
-                progress: 0.6
+        VStack(spacing: 8) {
+            KaraokeLine(
+                text: hasLyric ? model.currentLine : "暂无歌词",
+                progress: hasLyric && model.useKaraokeEffect ? model.progress : 0,
+                fontSize: 34,
+                base: hasLyric ? .white : .white.opacity(0.7),
+                played: Color(red: 0.55, green: 1, blue: 0.35)
             )
-            .preferredColorScheme(.dark)
+
+            if hasLyric, !model.nextLine.isEmpty {
+                outlined(model.nextLine, size: 20, color: .white.opacity(0.5))
+            }
         }
-        .frame(width: 800)
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func outlined(_ text: String, size: CGFloat, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: size, weight: .semibold))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
+            .shadow(color: .black, radius: 0, x: 1, y: 0)
+            .shadow(color: .black, radius: 0, x: -1, y: 0)
+            .shadow(color: .black, radius: 0, x: 0, y: 1)
+            .shadow(color: .black, radius: 0, x: 0, y: -1)
+            .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
+    }
+}
+
+/// 当前行：白字描边，已唱部分从左向右铺成绿色
+private struct KaraokeLine: View {
+    let text: String
+    let progress: Double
+    let fontSize: CGFloat
+    let base: Color
+    let played: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: fontSize, weight: .bold))
+            .foregroundStyle(base)
+            .lineLimit(1)
+            .minimumScaleFactor(0.45)
+            .overlay {
+                Text(text)
+                    .font(.system(size: fontSize, weight: .bold))
+                    .foregroundStyle(played)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.45)
+                    .mask(alignment: .leading) {
+                        GeometryReader { proxy in
+                            Rectangle()
+                                .frame(width: max(0, proxy.size.width * progress))
+                        }
+                    }
+            }
+            .shadow(color: .black, radius: 0, x: 1.5, y: 0)
+            .shadow(color: .black, radius: 0, x: -1.5, y: 0)
+            .shadow(color: .black, radius: 0, x: 0, y: 1.5)
+            .shadow(color: .black, radius: 0, x: 0, y: -1.5)
+            .shadow(color: .black.opacity(0.85), radius: 3, y: 1)
     }
 }

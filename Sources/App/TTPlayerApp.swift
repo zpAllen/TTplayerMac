@@ -2,31 +2,50 @@
 //  TTPlayerApp.swift
 //  TTPlayer for macOS
 //
-//  应用入口
+//  应用入口。菜单和主窗口共用同一个 PlaybackManager。
 //
 
 import SwiftUI
 
 @main
 struct TTPlayerApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var manager = PlaybackManager()
+    @StateObject private var panels = PanelController()
+    @StateObject private var desktopLyric = DesktopLyricManager()
+    @StateObject private var hotkeys = GlobalHotkeyManager()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             ClassicMainWindow()
                 .environmentObject(manager)
+                .environmentObject(panels)
+                .environmentObject(desktopLyric)
+                .task {
+                    manager.restoreIfNeeded()
+                    desktopLyric.loadSettings()
+                    registerHotkeysIfNeeded()
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase != .active {
+                        manager.persist()
+                        desktopLyric.saveSettings()
+                    }
+                }
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-        .defaultSize(width: 327, height: 141)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 480, height: 560)
         .commands {
-            // 移除默认的"新建窗口"菜单项
             CommandGroup(replacing: .newItem) {}
 
-            // 文件菜单
             CommandMenu("文件") {
-                Button("打开音乐文件...") {
-                    openFilePicker()
+                Button("打开音乐文件或文件夹...") {
+                    FileOpener.openAudioFiles { urls in
+                        guard !urls.isEmpty else { return }
+                        Task { await manager.importTracks(from: urls) }
+                    }
                 }
                 .keyboardShortcut("o", modifiers: .command)
 
@@ -38,10 +57,9 @@ struct TTPlayerApp: App {
                 .keyboardShortcut("k", modifiers: [.command, .shift])
             }
 
-            // 播放控制菜单
             CommandMenu("播放") {
                 Button("播放/暂停") {
-                    manager.player.togglePlayPause()
+                    manager.togglePlayPause()
                 }
                 .keyboardShortcut(.space)
 
@@ -75,62 +93,60 @@ struct TTPlayerApp: App {
                 .keyboardShortcut(.downArrow, modifiers: .command)
 
                 Button("静音") {
-                    manager.player.toggleMute()
+                    manager.toggleMute()
                 }
                 .keyboardShortcut("m", modifiers: .command)
 
                 Divider()
 
                 Menu("播放模式") {
-                    Button(PlayMode.sequential.rawValue) {
-                        manager.playlist.playMode = .sequential
-                    }
-                    Button(PlayMode.repeatAll.rawValue) {
-                        manager.playlist.playMode = .repeatAll
-                    }
-                    Button(PlayMode.repeatOne.rawValue) {
-                        manager.playlist.playMode = .repeatOne
-                    }
-                    Button(PlayMode.shuffle.rawValue) {
-                        manager.playlist.playMode = .shuffle
+                    ForEach(PlayMode.allCases, id: \.self) { mode in
+                        Button(mode.rawValue) {
+                            manager.playlist.playMode = mode
+                            manager.persist()
+                        }
                     }
                 }
             }
 
-            // 窗口菜单 - 保留但暂时不实现歌词窗口
             CommandMenu("窗口") {
                 Button("播放列表") {
-                    // 注意：这个功能需要窗口级别的状态管理
-                    // 暂时通过快捷键实现
+                    panels.playlistDocked.toggle()
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
 
+                Button("歌词") {
+                    panels.toggleLyrics(syncEngine: manager.lyricSync, manager: manager)
+                }
+                .keyboardShortcut("l", modifiers: .command)
+
                 Button("均衡器") {
-                    // 注意：这个功能需要窗口级别的状态管理
-                    // 暂时通过快捷键实现
+                    panels.toggleEqualizer(equalizer: manager.equalizer)
                 }
                 .keyboardShortcut("e", modifiers: .command)
+
+                Button("桌面歌词") {
+                    desktopLyric.toggle()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button(panels.pinned ? "取消置顶" : "总在最前") {
+                    panels.setPinned(!panels.pinned)
+                }
             }
         }
     }
 
-    /// 打开文件选择器
-    private func openFilePicker() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowedContentTypes = [
-            .audio,
-            .mp3,
-            .mpeg4Audio
-        ]
-        panel.message = "选择音乐文件"
-
-        if panel.runModal() == .OK {
-            Task {
-                await manager.importTracks(from: panel.urls)
-            }
-        }
+    private func registerHotkeysIfNeeded() {
+        hotkeys.registerDefaultHotkeys(
+            onPlayPause: { manager.togglePlayPause() },
+            onNext: { manager.playNext() },
+            onPrevious: { manager.playPrevious() },
+            onVolumeUp: { manager.increaseVolume() },
+            onVolumeDown: { manager.decreaseVolume() },
+            onShowLyrics: { desktopLyric.toggle() }
+        )
     }
 }

@@ -76,6 +76,10 @@ struct Track: Identifiable, Codable, Equatable {
             }
         }
 
+        if artworkData == nil {
+            artworkData = await Self.embeddedArtwork(from: asset)
+        }
+
         // 获取时长
         let duration = try? await asset.load(.duration).seconds
 
@@ -87,6 +91,29 @@ struct Track: Identifiable, Codable, Equatable {
             duration: duration ?? 0,
             artworkData: artworkData
         )
+    }
+
+    /// 从 ID3 APIC 等标签读取封面。commonMetadata 没有图时用这条路径。
+    private static func embeddedArtwork(from asset: AVAsset) async -> Data? {
+        guard let formats = try? await asset.load(.availableMetadataFormats) else { return nil }
+
+        for format in formats {
+            guard let items = try? await asset.loadMetadata(for: format) else { continue }
+            for item in items {
+                let identifier = item.identifier?.rawValue.lowercased() ?? ""
+                let key = ((item.key as? String) ?? "").lowercased()
+                let isArtwork = item.commonKey?.rawValue == "artwork"
+                    || identifier.contains("apic")
+                    || identifier.contains("artwork")
+                    || key == "apic"
+                guard isArtwork else { continue }
+                if let data = try? await item.load(.dataValue), !data.isEmpty {
+                    return data
+                }
+            }
+        }
+
+        return nil
     }
 
     /// 显示名称（用于列表显示）

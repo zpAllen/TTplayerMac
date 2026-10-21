@@ -18,6 +18,7 @@ struct ClassicLyricWindow: View {
     @AppStorage("desktop.fontSize") private var fontSize = 34.0
     @AppStorage("desktop.color") private var colorName = DesktopLyricColor.white.rawValue
     @AppStorage("desktop.opacity") private var opacity = 1.0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -181,7 +182,7 @@ struct ClassicLyricWindow: View {
                     return
                 }
 
-                withAnimation(.easeInOut(duration: 0.3)) {
+                withAnimation(.easeInOut(duration: reduceMotion ? 0 : 0.3)) {
                     proxy.scrollTo(syncEngine.allLines[newIndex].id, anchor: .center)
                 }
             }

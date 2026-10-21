@@ -69,6 +69,16 @@ struct ClassicProgressBar: View {
     }
 }
 
+/// 自绘界面的进度条。自己观察播放器，时间刷新不带着主窗口一起重算。
+struct ClassicProgressBarLive: View {
+    @ObservedObject var player: EnhancedAudioPlayer
+    var onSeek: (TimeInterval) -> Void
+
+    var body: some View {
+        ClassicProgressBar(current: player.currentTime, total: player.duration, onSeek: onSeek)
+    }
+}
+
 enum PlayerMetrics {
     static let title: CGFloat = 26
     static let spectrum: CGFloat = 78

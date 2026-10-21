@@ -31,9 +31,12 @@ struct ClassicMainWindow: View {
             if let activeSkin {
                 let width = contentWidth > 1 ? contentWidth : activeSkin.size.width
                 let height = width * activeSkin.size.height / activeSkin.size.width
+                // 时间、时长由皮肤画布自己订阅播放器。这个 view 只在播放状态、
+                // 歌曲、面板开关变化时重算，每秒十次的时间刷新到不了 SwiftUI。
                 SkinPlayerView(
                     window: activeSkin,
                     snapshot: skinSnapshot,
+                    player: manager.player,
                     analyzer: manager.player.analyzer,
                     onButton: handleSkinButton,
                     onSeek: { manager.player.seek(to: $0) },
@@ -43,11 +46,7 @@ struct ClassicMainWindow: View {
             } else {
                 titleBar
                 playbackStage
-                ClassicProgressBar(
-                current: manager.player.currentTime,
-                total: manager.player.duration,
-                onSeek: { manager.player.seek(to: $0) }
-            )
+                ClassicProgressBarLive(player: manager.player) { manager.player.seek(to: $0) }
                 ClassicControlBar(manager: manager)
             }
 
@@ -126,7 +125,9 @@ struct ClassicMainWindow: View {
             handleDrop(providers)
             return true
         }
-        .onChange(of: manager.player.currentTime) { _, _ in
+        // 用 onReceive 而不是 onChange：主窗口 body 不再随 currentTime 重算，
+        // 但桌面歌词仍然每次时间刷新都同步。
+        .onReceive(manager.player.$currentTime) { _ in
             pushDesktopLyric()
         }
         .onChange(of: manager.lyricSync.currentLine?.text) { _, _ in
@@ -158,7 +159,9 @@ struct ClassicMainWindow: View {
         return SkinSnapshot(
             isPlaying: manager.player.isPlaying,
             isMuted: manager.player.isMuted,
-            time: manager.player.currentTime,
+            // 时间和时长由皮肤画布订阅播放器后自己填。这里不读 currentTime，
+            // 主窗口就不会因为时间刷新而重算。
+            time: 0,
             duration: manager.player.duration,
             volume: manager.player.volume,
             title: track?.displayName ?? "千千静听",
@@ -261,6 +264,7 @@ struct ClassicMainWindow: View {
             }
             .buttonStyle(.plain)
             .help("最小化")
+            .accessibilityLabel("最小化")
 
             Button(action: { NSApp.terminate(nil) }) {
                 Text("×")
@@ -270,6 +274,7 @@ struct ClassicMainWindow: View {
             }
             .buttonStyle(.plain)
             .help("退出")
+            .accessibilityLabel("退出")
         }
         .padding(.horizontal, 8)
         .frame(height: PlayerMetrics.title)

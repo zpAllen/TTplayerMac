@@ -14,7 +14,9 @@ class LyricSyncEngine: ObservableObject {
 
     @Published var currentLine: LRCLine?
     @Published var currentIndex: Int?
-    @Published var progress: Double = 0.0  // 当前行播放进度 0.0 ~ 1.0
+    /// 当前行播放进度 0.0 ~ 1.0。刻意不发布：进度每秒变十次，
+    /// 发布出去会让整个主窗口跟着重算。桌面歌词在每次时间刷新时主动读它。
+    private(set) var progress: Double = 0.0
     /// 用户额外提前或延后，单位秒。和文件里的 [offset:] 分开，避免存 LRC 时加两次。
     @Published var userOffset: TimeInterval = UserDefaults.standard.double(forKey: "lyrics.userOffset")
 

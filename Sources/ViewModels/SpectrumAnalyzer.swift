@@ -10,6 +10,9 @@ import AVFoundation
 import Accelerate
 
 /// 频谱分析器
+///
+/// 音频线程每次回调都会计算，但主线程最多 30Hz 发布一次：柱状图看不出差别，
+/// 主线程重绘量少三成。缓冲区全部复用，回调里不再分配数组。
 class SpectrumAnalyzer: ObservableObject {
     // MARK: - Properties
 
@@ -19,16 +22,29 @@ class SpectrumAnalyzer: ObservableObject {
     private let log2n: vDSP_Length
     private let bufferSize: Int = 1024
     private let binCount: Int = 32
+    /// 主线程发布间隔。约 30Hz，和 tap 的 43Hz 相比几乎看不出区别。
+    private let publishInterval: TimeInterval = 1.0 / 30.0
 
-    // FFT 缓冲区
+    // FFT 缓冲区（复用，避免每个音频回调分配）
     private var realPart: [Float]
     private var imagPart: [Float]
     private var window: [Float]
+    private var windowed: [Float]
+    private var magnitudes: [Float]
+    private var decibels: [Float]
+    private var newData: [Float]
+
+    // 频段边界只在采样率变化时重算
+    private var bands: [(start: Int, end: Int)] = []
+    private var bandsSampleRate: Float = 0
 
     // 平滑处理
     private let smoothingFactor: Float = 0.7
     private var previousData: [Float]
     private var sampleRate: Float = 44100
+
+    private var lastPublishTime: TimeInterval = 0
+    private var isSilent = true
 
     // MARK: - Initialization
 
@@ -39,6 +55,10 @@ class SpectrumAnalyzer: ObservableObject {
         self.realPart = [Float](repeating: 0, count: bufferSize / 2)
         self.imagPart = [Float](repeating: 0, count: bufferSize / 2)
         self.previousData = Array(repeating: 0, count: binCount)
+        self.windowed = [Float](repeating: 0, count: bufferSize)
+        self.magnitudes = [Float](repeating: 0, count: bufferSize / 2)
+        self.decibels = [Float](repeating: 0, count: bufferSize / 2)
+        self.newData = Array(repeating: 0, count: binCount)
 
         // 创建汉明窗
         self.window = [Float](repeating: 0, count: bufferSize)
@@ -51,6 +71,7 @@ class SpectrumAnalyzer: ObservableObject {
     func reset() {
         previousData = Array(repeating: 0, count: binCount)
         spectrumData = previousData
+        isSilent = true
     }
 
     /// 分析音频缓冲区。FFT 在音频线程算，结果回到主线程再发布。
@@ -60,19 +81,17 @@ class SpectrumAnalyzer: ObservableObject {
         var rms: Float = 0
         vDSP_rmsqv(channelData[0], 1, &rms, vDSP_Length(min(bufferSize, Int(buffer.frameLength))))
         if rms < 0.0008 {
-            DispatchQueue.main.async { [weak self] in
-                self?.reset()
-            }
+            publishSilence()
             return
         }
 
         let frameLength = Int(buffer.frameLength)
         guard frameLength >= bufferSize else { return }
 
+        isSilent = false
         sampleRate = Float(buffer.format.sampleRate)
 
         // 应用汉明窗
-        var windowed = [Float](repeating: 0, count: bufferSize)
         vDSP_vmul(
             channelData[0], 1,
             window, 1,
@@ -97,11 +116,9 @@ class SpectrumAnalyzer: ObservableObject {
         fftSetup?.forward(input: splitComplex, output: &splitComplex)
 
         // 计算幅度
-        var magnitudes = [Float](repeating: 0, count: bufferSize / 2)
         vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(bufferSize / 2))
 
         // 转换为 dB
-        var decibels = [Float](repeating: 0, count: bufferSize / 2)
         var reference: Float = 1.0
         vDSP_vdbcon(magnitudes, 1, &reference, &decibels, 1, vDSP_Length(bufferSize / 2), 1)
 
@@ -109,14 +126,21 @@ class SpectrumAnalyzer: ObservableObject {
         updateSpectrumBins(from: decibels)
     }
 
+    /// 静音只发布一次。之前每个回调都赋全零数组，@Published 会 43Hz 触发重绘。
+    private func publishSilence() {
+        guard !isSilent else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.reset()
+        }
+    }
+
     /// 更新频谱数据（分组到 32 个柱状图）
     private func updateSpectrumBins(from fftData: [Float]) {
-        let frequencyBands = calculateFrequencyBands()
-        var newData = [Float](repeating: 0, count: binCount)
+        let frequencyBands = frequencyBands()
 
         for (index, range) in frequencyBands.enumerated() {
-            let startBin = Int(range.lowerBound)
-            let endBin = Int(range.upperBound)
+            let startBin = range.start
+            let endBin = range.end
 
             // 计算该频段的平均幅度
             var sum: Float = 0
@@ -131,30 +155,33 @@ class SpectrumAnalyzer: ObservableObject {
             let average = count > 0 ? sum / Float(count) : 0
 
             // 归一化到 0-1 范围（-60 dB ~ 0 dB）
-            let normalized = max(0, min(1, (average + 60) / 60))
-
-            newData[index] = normalized
+            newData[index] = max(0, min(1, (average + 60) / 60))
         }
 
-        let snapshot = newData
-        DispatchQueue.main.async { [weak self] in
-            self?.publish(snapshot)
-        }
-    }
-
-    /// 惯性平滑后发布。只在主线程写 @Published。
-    private func publish(_ newData: [Float]) {
-        var smoothed = newData
+        // 平滑在音频线程做完，主线程只负责发布
+        var changed = false
         for i in 0..<binCount {
-            smoothed[i] = previousData[i] * smoothingFactor + newData[i] * (1 - smoothingFactor)
+            let smoothed = previousData[i] * smoothingFactor + newData[i] * (1 - smoothingFactor)
+            if abs(smoothed - previousData[i]) > 0.002 { changed = true }
+            previousData[i] = smoothed
         }
-        previousData = smoothed
-        spectrumData = smoothed
+        guard changed else { return }
+
+        let now = Date.timeIntervalSinceReferenceDate
+        guard now - lastPublishTime >= publishInterval else { return }
+        lastPublishTime = now
+
+        let snapshot = previousData
+        DispatchQueue.main.async { [weak self] in
+            self?.spectrumData = snapshot
+        }
     }
 
-    /// 计算对数分布的频率范围
-    private func calculateFrequencyBands() -> [ClosedRange<Float>] {
-        var bands: [ClosedRange<Float>] = []
+    /// 频率边界换算成 FFT bin。采样率不变时直接复用。
+    private func frequencyBands() -> [(start: Int, end: Int)] {
+        let rate = sampleRate > 0 ? sampleRate : 44100
+        guard bands.isEmpty || abs(rate - bandsSampleRate) > 0.5 else { return bands }
+
         let minFreq: Float = 20.0  // 20 Hz
         let maxFreq: Float = 20000.0  // 20 kHz
 
@@ -162,26 +189,19 @@ class SpectrumAnalyzer: ObservableObject {
         let logMax = log10(maxFreq)
         let logStep = (logMax - logMin) / Float(binCount)
 
-        for i in 0..<binCount {
-            let logLower = logMin + Float(i) * logStep
-            let logUpper = logMin + Float(i + 1) * logStep
-
-            let lowerFreq = pow(10, logLower)
-            let upperFreq = pow(10, logUpper)
-
-            // 转换为 FFT bin 索引
-            let lowerBin = frequencyToBin(lowerFreq)
-            let upperBin = frequencyToBin(upperFreq)
-
-            bands.append(lowerBin...upperBin)
+        bands = (0..<binCount).map { index in
+            let lowerFreq = pow(10, logMin + Float(index) * logStep)
+            let upperFreq = pow(10, logMin + Float(index + 1) * logStep)
+            let lowerBin = Int(frequencyToBin(lowerFreq, rate: rate))
+            let upperBin = Int(frequencyToBin(upperFreq, rate: rate))
+            return (start: max(0, lowerBin), end: max(lowerBin + 1, upperBin))
         }
-
+        bandsSampleRate = rate
         return bands
     }
 
     /// 频率转 FFT bin 索引
-    private func frequencyToBin(_ frequency: Float) -> Float {
-        let rate = sampleRate > 0 ? sampleRate : 44100
-        return frequency * Float(bufferSize) / rate
+    private func frequencyToBin(_ frequency: Float, rate: Float) -> Float {
+        frequency * Float(bufferSize) / rate
     }
 }

@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AppKit
+import Combine
 import Accelerate
 
 struct SkinSnapshot: Equatable {
@@ -28,6 +29,8 @@ struct SkinSnapshot: Equatable {
 struct SkinPlayerView: NSViewRepresentable {
     var window: LoadedWindow
     var snapshot: SkinSnapshot
+    /// 画布自己订阅播放器拿时间和时长，SwiftUI 不参与每秒十次的刷新。
+    var player: EnhancedAudioPlayer?
     var analyzer: SpectrumAnalyzer
     var onButton: (String) -> Void
     var onSeek: (TimeInterval) -> Void
@@ -39,6 +42,7 @@ struct SkinPlayerView: NSViewRepresentable {
         canvas.onButton = onButton
         canvas.onSeek = onSeek
         canvas.onVolume = onVolume
+        canvas.bindPlayer(player)
         canvas.apply(window: window, snapshot: snapshot)
         return canvas
     }
@@ -48,6 +52,7 @@ struct SkinPlayerView: NSViewRepresentable {
         canvas.onSeek = onSeek
         canvas.onVolume = onVolume
         canvas.analyzer = analyzer
+        canvas.bindPlayer(player)
         canvas.apply(window: window, snapshot: snapshot)
     }
 }
@@ -67,10 +72,22 @@ final class SkinCanvas: NSView {
     private var hover: String?
     private var pressed: String?
     private var drag: DragKind?
-    private var spectrumHost: NSHostingView<EnhancedSpectrumView>?
+    private var spectrumHost: SpectrumBarsView?
     private var tracking: NSTrackingArea?
+    private var boundPlayer: EnhancedAudioPlayer?
+    private var playerCancellable: AnyCancellable?
     /// 皮肤图按目标像素尺寸缓存，避免每帧重新采样。
     private var sharpCache: [SharpBitmap.Key: CGImage] = [:]
+    /// 按钮覆盖文字的底色按切片缓存，避免每帧重建位图取样。
+    private var fillCache: [ButtonFillKey: NSColor] = [:]
+
+    private struct ButtonFillKey: Hashable {
+        let image: ObjectIdentifier
+        let sx: Int
+        let sy: Int
+        let sw: Int
+        let sh: Int
+    }
 
     private enum DragKind {
         case progress
@@ -92,16 +109,51 @@ final class SkinCanvas: NSView {
     }
 
     func apply(window: LoadedWindow, snapshot: SkinSnapshot) {
-        let skinChanged = skin.size != window.size || skin.controls.count != window.controls.count
-        if skin.image !== window.image {
+        // SwiftUI 递进来的快照不带时间；时间和时长以播放器当前值为准，
+        // 避免一次普通重算把进度条打回 0。
+        var next = snapshot
+        if let player = boundPlayer {
+            next.time = player.currentTime
+            next.duration = player.duration
+        }
+        let imageChanged = skin.image !== window.image
+        let skinChanged = imageChanged || skin.size != window.size || skin.controls.count != window.controls.count
+        let snapshotChanged = self.snapshot != next
+        if imageChanged {
             sharpCache.removeAll()
+            fillCache.removeAll()
         }
         skin = window
-        self.snapshot = snapshot
+        self.snapshot = next
         if skinChanged {
             installSpectrum()
         }
+        // 父视图会因为歌词、列表等无关状态重算，快照没变就别整窗重绘。
+        guard skinChanged || snapshotChanged else { return }
         needsDisplay = true
+    }
+
+    /// 订阅播放器的时间刷新。每秒十次的重绘只停在这块画布上。
+    func bindPlayer(_ player: EnhancedAudioPlayer?) {
+        guard boundPlayer !== player else { return }
+        boundPlayer = player
+        playerCancellable = nil
+        guard let player else { return }
+        playerCancellable = player.$currentTime
+            .merge(with: player.$duration)
+            .sink { [weak self] _ in
+                guard let self, let player = self.boundPlayer else { return }
+                var next = self.snapshot
+                next.time = player.currentTime
+                next.duration = player.duration
+                let previous = self.snapshot
+                guard next != previous else { return }
+                self.snapshot = next
+                // LED 只显示到秒，进度条每秒移动不到一个像素。时间刷新十次里
+                // 大多数根本看不出变化，没必要整窗重绘。
+                guard self.showsDifferentPixels(previous: previous, next: next) else { return }
+                self.needsDisplay = true
+            }
     }
 
     override func viewDidMoveToWindow() {
@@ -161,7 +213,9 @@ final class SkinCanvas: NSView {
     }
 
     private func drawSkin() {
-        drawBitmap(skin.image, from: NSRect(origin: .zero, size: skin.image.size), in: CGRect(origin: .zero, size: skin.size))
+        // 整窗背景分数倍放大时允许轻微锐化（透明圆角在锐化后回填原 alpha），
+        // 窗口拉成非整数倍也不糊。
+        drawBitmap(skin.image, from: NSRect(origin: .zero, size: skin.image.size), in: CGRect(origin: .zero, size: skin.size), sharpenIfFractional: true)
         for control in skin.controls {
             switch control {
             case let .progress(rect, thumb, fill, groove):
@@ -249,9 +303,24 @@ final class SkinCanvas: NSView {
         // 按钮上的字只有十几像素，放大后仍是糊的。盖住原字，改画矢量文字。
         let inner = rect.insetBy(dx: 1.5, dy: 2)
         guard inner.width > 4, inner.height > 4 else { return }
-        buttonFillColor(image, source: source).setFill()
+        cachedButtonFillColor(image, source: source).setFill()
         NSBezierPath(rect: place(inner)).fill()
         drawLabel(caption, rect: inner, color: NSColor(srgbRed: 0.94, green: 0.97, blue: 0.98, alpha: 1), fontSize: 10, align: .center)
+    }
+
+    /// 按钮底色按切片缓存。时间每秒刷新 10 次，每帧为三个按钮重建位图不划算。
+    private func cachedButtonFillColor(_ image: NSImage, source: NSRect) -> NSColor {
+        let key = ButtonFillKey(
+            image: ObjectIdentifier(image),
+            sx: SharpBitmap.quantize(source.minX),
+            sy: SharpBitmap.quantize(source.minY),
+            sw: SharpBitmap.quantize(source.width),
+            sh: SharpBitmap.quantize(source.height)
+        )
+        if let cached = fillCache[key] { return cached }
+        let color = buttonFillColor(image, source: source)
+        fillCache[key] = color
+        return color
     }
 
     private func buttonCaption(_ id: String) -> String? {
@@ -363,6 +432,17 @@ final class SkinCanvas: NSView {
             drawBitmap(digits, from: source, in: dest)
             x += width
         }
+    }
+
+    /// 时间刷新后是否真的能看出差别：秒数变了（LED），或进度条至少挪动半个像素。
+    private func showsDifferentPixels(previous: SkinSnapshot, next: SkinSnapshot) -> Bool {
+        if next.duration != previous.duration { return true }
+        if Int(next.time) != Int(previous.time) { return true }
+        guard next.duration > 0, let rect = progressRect() else { return true }
+        let width = rect.width * displayScale * backingScale
+        guard width > 0 else { return true }
+        let moved = abs(next.time - previous.time) / next.duration * width
+        return moved >= 0.5
     }
 
     private var progressRatio: CGFloat {
@@ -527,7 +607,7 @@ final class SkinCanvas: NSView {
     }
 
     /// 把皮肤位图放大到当前窗口的屏幕像素。接近整数倍时用最近邻，避免按钮字被插值抹平。
-    private func drawBitmap(_ image: NSImage, from source: NSRect, in skinRect: CGRect) {
+    private func drawBitmap(_ image: NSImage, from source: NSRect, in skinRect: CGRect, sharpenIfFractional: Bool = false) {
         let dest = pixelAligned(place(skinRect))
         guard dest.width > 0.5, dest.height > 0.5, source.width > 0.5, source.height > 0.5 else { return }
         let pixelWidth = max(1, Int((dest.width * backingScale).rounded()))
@@ -539,12 +619,13 @@ final class SkinCanvas: NSView {
             sw: SharpBitmap.quantize(source.width),
             sh: SharpBitmap.quantize(source.height),
             dw: pixelWidth,
-            dh: pixelHeight
+            dh: pixelHeight,
+            sharpen: sharpenIfFractional
         )
         let rendered: CGImage
         if let cached = sharpCache[key] {
             rendered = cached
-        } else if let made = SharpBitmap.render(image, from: source, width: pixelWidth, height: pixelHeight) {
+        } else if let made = SharpBitmap.render(image, from: source, width: pixelWidth, height: pixelHeight, sharpenIfFractional: sharpenIfFractional) {
             if sharpCache.count > 96 {
                 sharpCache.removeAll()
             }
@@ -574,12 +655,11 @@ final class SkinCanvas: NSView {
             return nil
         }).first else { return }
 
-        let host = NSHostingView(rootView: EnhancedSpectrumView(analyzer: analyzer, embedsInSkin: true))
-        host.frame = visual
-        host.sizingOptions = []
-        host.wantsLayer = true
-        host.layer?.isOpaque = false
-        host.layer?.backgroundColor = NSColor.clear.cgColor
+        // 直接放原生绘制视图，不再套一层 NSHostingView/SwiftUI。
+        let host = SpectrumBarsView()
+        host.embedsInSkin = true
+        host.bind(analyzer)
+        host.frame = place(visual)
         addSubview(host)
         spectrumHost = host
     }
@@ -595,6 +675,7 @@ private enum SharpBitmap {
         let sh: Int
         let dw: Int
         let dh: Int
+        let sharpen: Bool
     }
 
     private static let colorSpace = CGColorSpaceCreateDeviceRGB()
@@ -603,9 +684,9 @@ private enum SharpBitmap {
         Int((value * 4).rounded())
     }
 
-    static func render(_ image: NSImage, from source: NSRect, width: Int, height: Int) -> CGImage? {
+    static func render(_ image: NSImage, from source: NSRect, width: Int, height: Int, sharpenIfFractional: Bool) -> CGImage? {
         guard let slice = slice(image, from: source) else { return nil }
-        return scale(slice, width: max(1, width), height: max(1, height))
+        return scale(slice, width: max(1, width), height: max(1, height), sharpenIfFractional: sharpenIfFractional)
     }
 
     private static func slice(_ image: NSImage, from source: NSRect) -> CGImage? {
@@ -644,7 +725,7 @@ private enum SharpBitmap {
         return rep.cgImage
     }
 
-    private static func scale(_ source: CGImage, width: Int, height: Int) -> CGImage? {
+    private static func scale(_ source: CGImage, width: Int, height: Int, sharpenIfFractional: Bool) -> CGImage? {
         if source.width == width && source.height == height { return source }
         let factor = CGFloat(width) / CGFloat(max(source.width, 1))
         if factor >= 1, abs(factor - factor.rounded()) < 0.02 {
@@ -661,9 +742,10 @@ private enum SharpBitmap {
             if steppedWidth == width && steppedHeight == height { return crisp }
             return lanczos(crisp, width: width, height: height, sharpen: false)
         }
-        // 只收紧小图（按钮、数字）。整张背景和长进度条带透明边，锐化会在边缘出晕。
+        // 收紧小图（按钮、数字）和整窗背景。透明边缘在锐化后回填未锐化像素，
+        // 圆角镂空处不会出彩色晕；长进度条等控件图仍不锐化。
         let glyph = source.width <= 180 && source.height <= 64
-        return lanczos(source, width: width, height: height, sharpen: factor > 1.2 && glyph)
+        return lanczos(source, width: width, height: height, sharpen: factor > 1.15 && (glyph || sharpenIfFractional))
     }
 
     private static func resample(_ image: CGImage, width: Int, height: Int, interpolation: CGInterpolationQuality) -> CGImage? {
@@ -734,6 +816,9 @@ private enum SharpBitmap {
                     }
                 }
                 if sharpenError == kvImageNoError {
+                    // 卷积会把不透明像素的亮度混进透明边，圆角镂空处出彩色晕。
+                    // 非全不透明的像素整体回退成未锐化的原值，透明边保持干净。
+                    mergeBoundaryAlpha(into: &sharpened, from: dest)
                     free(dest.data)
                     dest = sharpened
                 } else {
@@ -750,5 +835,27 @@ private enum SharpBitmap {
         }
         free(dest.data)
         return result
+    }
+
+    /// alpha != 255 的像素用未锐化缓冲区的原值覆盖，透明边不受卷积污染。
+    /// 缓冲区是 premultipliedFirst，每像素 [A, R, G, B]。
+    private static func mergeBoundaryAlpha(into sharpened: inout vImage_Buffer, from plain: vImage_Buffer) {
+        guard sharpened.width == plain.width, sharpened.height == plain.height,
+              let sharpenedData = sharpened.data, let plainData = plain.data else { return }
+        let s = sharpenedData.bindMemory(to: UInt8.self, capacity: sharpened.rowBytes * Int(sharpened.height))
+        let p = plainData.bindMemory(to: UInt8.self, capacity: plain.rowBytes * Int(plain.height))
+        let width = Int(sharpened.width)
+        for y in 0..<Int(sharpened.height) {
+            let sRow = s + y * sharpened.rowBytes
+            let pRow = p + y * plain.rowBytes
+            for x in 0..<width {
+                let i = x * 4
+                guard pRow[i] != 255 else { continue }
+                sRow[i] = pRow[i]
+                sRow[i + 1] = pRow[i + 1]
+                sRow[i + 2] = pRow[i + 2]
+                sRow[i + 3] = pRow[i + 3]
+            }
+        }
     }
 }

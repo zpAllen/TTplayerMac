@@ -29,12 +29,13 @@ struct ClassicButton: View {
     var isLarge: Bool = false
     var isActive: Bool = false
     let action: () -> Void
+    @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
             ZStack {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(isActive ? TTPlayerClassicColors.accent.opacity(0.28) : Color.white.opacity(0.06))
+                    .fill(isActive ? TTPlayerClassicColors.accent.opacity(0.28) : Color.white.opacity(hovering ? 0.12 : 0.06))
                 RoundedRectangle(cornerRadius: 2)
                     .stroke(TTPlayerClassicColors.bevelDark, lineWidth: 1)
                 RoundedRectangle(cornerRadius: 2)
@@ -64,6 +65,8 @@ struct ClassicButton: View {
                 }
             }
             .frame(width: title == nil ? (isLarge ? 32 : 24) : 36, height: isLarge ? 28 : 22)
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.15), value: hovering)
         }
         .buttonStyle(.plain)
     }

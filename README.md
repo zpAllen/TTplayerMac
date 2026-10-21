@@ -25,7 +25,7 @@
 - 歌词窗口可以整体提前或延后最多 10 秒，并记住。这个偏移和文件里的 `[offset:]` 分开。「存为 LRC」按听到的时间写出新文件，不改音频标签。
 - 桌面歌词在屏幕底部。字号、颜色和透明度在歌词窗口里调。没有歌词时显示「暂无歌词」。
 - 十段均衡器，带预设。手动拖动频段会进入「自定义」，不会把曲线清掉。
-- 找到原版 `ttpres.dll` 时，主窗口用里面的默认皮肤（按钮、进度、音量、时间、频谱位置都按 `Skin.xml`）。列表、歌词、均衡器停在播放器下面，一次只显示一个。歌词和均衡器标题栏右侧的窗口图标可以再拆成单独窗口。找不到皮肤时，退回自绘界面。皮肤图不打进安装包。
+- 主窗口用原版默认皮肤（按钮、进度、音量、时间、频谱位置都按 `Skin.xml`），皮肤随 app 打包分发（`TTPlayerv5.7.9/ttpres.dll`，来自已停止维护的原版千千静听 5.7.9）。列表、歌词、均衡器停在播放器下面，一次只显示一个。歌词和均衡器标题栏右侧的窗口图标可以再拆成单独窗口。找不到皮肤时（比如直接跑裸二进制），退回自绘界面。皮肤放大用整数倍最近邻，非整数倍时对不透明区域做轻微锐化，边缘保持利落；面板开合和皮肤加载有过渡动画。
 - 窗口可置顶。列表可以收起。
 - 菜单栏有播放、上一首、下一首和当前歌名。系统「正在播放」会收到标题、进度、封面，以及播放、暂停、上下首和拖动进度。
 - 全局快捷键可以在「窗口 → 快捷键」里改，并记住。
@@ -36,9 +36,9 @@
 
 打开后用菜单「文件 → 打开音乐文件或文件夹」（Command+O），选文件或目录。也可以把文件、文件夹拖进窗口。
 
-在仓库目录启动时，程序会向上查找 `TTPlayerv5.7.9/ttpres.dll`，也会找同级目录 `TTPlayer/TTPlayerv5.7.9/ttpres.dll`。找到后主窗口就是原版默认皮肤，圆角是透明的。把窗口拉宽时，皮肤按比例铺满宽度，下面的列表、歌词或均衡器跟着铺满剩下的高度。空白处可以拖动窗口。皮肤上的按钮：播放/暂停、上一首、下一首、停止、静音、列表、歌词、均衡器。右上角只留最小化和关闭。最右边的音符按钮开关桌面歌词，打开时按钮呈按下状态。进度和音量可以直接拖。
+在仓库目录启动时，程序会向上查找 `TTPlayerv5.7.9/ttpres.dll`，也会找同级目录 `TTPlayer/TTPlayerv5.7.9/ttpres.dll`。找到后主窗口就是原版默认皮肤，圆角是透明的。皮肤刚加载时窗口宽会先对齐到最近的整数倍（默认 480 宽会收成 1 倍皮肤宽 327），保证整张皮肤按像素对齐不糊。之后把窗口拉宽时，皮肤按比例铺满宽度，非整数倍也有锐化兜底，下面的列表、歌词或均衡器跟着铺满剩下的高度。空白处可以拖动窗口。皮肤上的按钮：播放/暂停、上一首、下一首、停止、静音、列表、歌词、均衡器。右上角只留最小化和关闭。最右边的音符按钮开关桌面歌词，打开时按钮呈按下状态。进度和音量可以直接拖。
 
-打包后的 `TTPlayer.app` 也可以自己指定来源（二选一，目录优先）：
+打包后的 `TTPlayer.app` 自己带原版默认皮肤，开箱即是原版界面。也可以另外指定皮肤来源（二选一，目录优先）：
 
 ```bash
 defaults write com.ttplayer.macos skin.dll /path/to/ttpres.dll
@@ -110,59 +110,30 @@ swift build -c release
 
 ## 打包给别人使用
 
-打成 `TTPlayer.app` 再压缩。本机没有 Apple 开发者证书时，只能临时签名。对方第一次打开从网络下载的应用，需要右键「打开」，不能直接双击。
-
-Apple 芯片：
+打 DMG 安装包：
 
 ```bash
-swift build -c release
+# 图标（已生成过就不用再跑）
+swift Packaging/make_icon.swift
+./Packaging/make_icns.sh
 
-APP="TTPlayer.app"
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
-
-cp .build/arm64-apple-macosx/release/TTPlayer "$APP/Contents/MacOS/TTPlayer"
-
-cat > "$APP/Contents/Info.plist" << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleExecutable</key>
-  <string>TTPlayer</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.ttplayer.macos</string>
-  <key>CFBundleName</key>
-  <string>千千静听</string>
-  <key>CFBundleDisplayName</key>
-  <string>千千静听</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>1.0</string>
-  <key>CFBundleVersion</key>
-  <string>1</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>14.0</string>
-  <key>NSHighResolutionCapable</key>
-  <true/>
-</dict>
-</plist>
-EOF
-
-codesign --force --sign - "$APP"
-ditto -c -k --keepParent "$APP" TTPlayer.zip
+# 打 DMG
+./make_dmg.sh              # Apple 芯片
+./make_dmg.sh --universal  # Intel + Apple 芯片通用包
 ```
 
-把 `TTPlayer.zip` 发出去。对方解压后把 `TTPlayer.app` 拖进「应用程序」。
+产物 `TTPlayer-1.0.0.dmg`，里面是 `TTPlayer.app` 和 Applications 快捷方式。对方打开 DMG，把 TTPlayer 拖进「应用程序」就能用。
 
-Intel 与 Apple 芯片都能跑的包，编译改成：
+`./package_app.sh` 只出 `TTPlayer.app`（含图标、Info.plist、签名），适合自用或打成 zip：
 
 ```bash
-swift build -c release --arch arm64 --arch x86_64
+./package_app.sh --universal
+ditto -c -k --keepParent TTPlayer.app TTPlayer.zip
 ```
 
-复制 `.build/apple-macosx/release/TTPlayer`，不要用 `arm64-apple-macosx` 下面那个。
+图标在 `Packaging/`：`AppIcon_1024.png` 是 1024 母版（`make_icon.swift` 生成），`AppIcon.icns` 是打包用的全套尺寸（`make_icns.sh` 生成）。
+
+本机没有 Apple 开发者证书时只能临时签名。对方第一次打开从网络下载的应用，需要右键「打开」，不能直接双击。
 
 ## 源码布局
 

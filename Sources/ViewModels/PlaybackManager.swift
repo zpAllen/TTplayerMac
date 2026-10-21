@@ -175,15 +175,32 @@ class PlaybackManager: ObservableObject {
 
         lyricSync.connect(to: player)
 
-        // 子对象的变化要冒泡，主窗口才能跟着进度、歌词和列表刷新。
+        // 子对象的变化要冒泡，主窗口才能跟着歌词和列表刷新。
         // 列表实例会切换，单独在 observePlaylist 里订阅。
-        for object in [player.objectWillChange, lyricSync.objectWillChange, equalizer.objectWillChange] {
+        for object in [lyricSync.objectWillChange, equalizer.objectWillChange] {
             object
                 .sink { [weak self] _ in
                     self?.objectWillChange.send()
                 }
                 .store(in: &cancellables)
         }
+
+        // 播放器只冒泡真正影响布局的状态。currentTime 每秒变十次，
+        // 转发出去会让整个主窗口跟着重算；时间显示由各自的视图直接观察播放器。
+        let playerChanges: [AnyPublisher<Void, Never>] = [
+            player.$isPlaying.map { _ in () }.eraseToAnyPublisher(),
+            player.$duration.map { _ in () }.eraseToAnyPublisher(),
+            player.$volume.map { _ in () }.eraseToAnyPublisher(),
+            player.$isMuted.map { _ in () }.eraseToAnyPublisher(),
+            player.$currentTrack.map { _ in () }.eraseToAnyPublisher(),
+            player.$replayGainEnabled.map { _ in () }.eraseToAnyPublisher()
+        ]
+        Publishers.MergeMany(playerChanges)
+            .dropFirst(playerChanges.count)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
 
         player.$isPlaying
             .sink { [weak self] _ in

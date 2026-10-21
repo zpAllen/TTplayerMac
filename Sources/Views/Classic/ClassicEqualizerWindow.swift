@@ -28,6 +28,7 @@ struct ClassicEqualizerWindow: View {
                     .toggleStyle(.switch)
                     .labelsHidden()
                     .scaleEffect(0.7)
+                    .accessibilityLabel("启用均衡器")
 
                 if embedded {
                     PopOutButton(help: "在单独窗口打开均衡器", action: { onPopOut?() })

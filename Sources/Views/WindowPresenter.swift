@@ -271,9 +271,22 @@ struct PlayerWindowHost: NSViewRepresentable {
                     height = skinHeight
                 }
                 height = max(height, showsPlaylist ? skinHeight + 120 : skinHeight)
-                let width = min(max(window.frame.width, skin.width), 1200)
+                var width = min(max(window.frame.width, skin.width), 1200)
+                // 皮肤刚加载时把窗口宽对齐到整数倍。默认窗口 480 宽、皮肤约 275 宽，
+                // 1.745 倍是非整数，整张背景只能走插值会糊；对齐后走最近邻，边缘利落。
+                if skinChanged, !context.coordinator.didSnapSkinWidth {
+                    context.coordinator.didSnapSkinWidth = true
+                    let currentScale = window.frame.width / skin.width
+                    let stepped = min(4, max(1, Int(currentScale.rounded())))
+                    if abs(currentScale - CGFloat(stepped)) > 0.03 {
+                        width = CGFloat(stepped) * skin.width
+                    }
+                }
                 if skinChanged || dockChanged || extraChanged || abs(window.frame.height - height) > 1 {
-                    self.resize(window, size: NSSize(width: width, height: height))
+                    // 面板开合、皮肤加载用动画过渡；播放中的高度微调保持即时。
+                    let animate = skinChanged || dockChanged || extraChanged
+                    if animate { context.coordinator.suspendSnap() }
+                    self.resize(window, size: NSSize(width: width, height: height), animate: animate)
                 }
                 return
             }
@@ -285,17 +298,17 @@ struct PlayerWindowHost: NSViewRepresentable {
                 window.minSize = NSSize(width: 460, height: chrome + (self.playlistDocked ? 160 : 0) + extra)
                 window.maxSize = NSSize(width: 1400, height: 2400)
                 if skinChanged {
-                    self.resize(window, height: chrome + (self.playlistDocked ? 300 : 0) + extra)
+                    self.resize(window, height: chrome + (self.playlistDocked ? 300 : 0) + extra, animate: true)
                 } else if extraChanged {
-                    self.resize(window, height: max(window.frame.height + extra - previousExtra, window.minSize.height))
+                    self.resize(window, height: max(window.frame.height + extra - previousExtra, window.minSize.height), animate: true)
                 } else if dockChanged, window.frame.height < chrome + 180 + extra {
-                    self.resize(window, height: chrome + 300 + extra)
+                    self.resize(window, height: chrome + 300 + extra, animate: true)
                 }
             } else {
                 window.minSize = NSSize(width: 460, height: chrome)
                 window.maxSize = NSSize(width: 1400, height: chrome)
                 if dockChanged || extraChanged || abs(window.frame.height - chrome) > 1 {
-                    self.resize(window, height: chrome)
+                    self.resize(window, height: chrome, animate: true)
                 }
             }
         }
@@ -305,15 +318,15 @@ struct PlayerWindowHost: NSViewRepresentable {
         Coordinator()
     }
 
-    private func resize(_ window: NSWindow, height: CGFloat) {
-        resize(window, size: NSSize(width: window.frame.width, height: height))
+    private func resize(_ window: NSWindow, height: CGFloat, animate: Bool = false) {
+        resize(window, size: NSSize(width: window.frame.width, height: height), animate: animate)
     }
 
-    private func resize(_ window: NSWindow, size: NSSize) {
+    private func resize(_ window: NSWindow, size: NSSize, animate: Bool = false) {
         var frame = window.frame
         frame.origin.y += frame.size.height - size.height
         frame.size = size
-        window.setFrame(frame, display: false, animate: false)
+        window.setFrame(frame, display: true, animate: animate)
     }
 
     final class Coordinator {
@@ -321,9 +334,11 @@ struct PlayerWindowHost: NSViewRepresentable {
         var playlistDocked: Bool?
         var skinSize: CGSize?
         var dockedExtra: CGFloat?
+        var didSnapSkinWidth = false
         private var resizeToken: NSObjectProtocol?
         private var snapping = false
         private var snapScheduled = false
+        private var snapSuspended = false
 
         func watch(_ window: NSWindow) {
             guard resizeToken == nil else { return }
@@ -338,9 +353,17 @@ struct PlayerWindowHost: NSViewRepresentable {
             }
         }
 
+        /// 窗口动画期间先别吸附，否则 snap 会立刻把动画打断成瞬移。
+        func suspendSnap() {
+            snapSuspended = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                self?.snapSuspended = false
+            }
+        }
+
         /// 拉宽时皮肤变高。没有下方面板时，窗口高度跟着皮肤走，避免底下透出桌面。
         private func snap(_ window: NSWindow) {
-            guard let skin = skinSize, skin.width > 1, !snapping, !snapScheduled else { return }
+            guard let skin = skinSize, skin.width > 1, !snapping, !snapScheduled, !snapSuspended else { return }
             let skinHeight = skin.height * window.frame.width / skin.width
             let docked = playlistDocked == true
             let target = docked ? max(window.frame.height, skinHeight + 120) : skinHeight

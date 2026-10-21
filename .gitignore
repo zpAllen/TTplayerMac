@@ -1,6 +1,9 @@
 .DS_Store
 /.build
 /Packages
+/TTPlayer.app
+/TTPlayer-*.dmg
+/.dmg_stage
 xcuserdata/
 DerivedData/
 .swiftpm/configuration/registries.json

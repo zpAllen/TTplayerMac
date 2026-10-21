@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 /// 千千静听经典配色
 enum TTPlayerClassicColors {
@@ -101,17 +102,43 @@ enum SpectrumPalette: String, CaseIterable, Identifiable {
         }
     }
 
-    var gradient: LinearGradient {
-        let colors: [Color]
+    var colors: [Color] {
         switch self {
         case .green:
-            colors = [Color(hex: "#00FF00"), Color(hex: "#00AA00"), Color(hex: "#006600")]
+            return [Color(hex: "#00FF00"), Color(hex: "#00AA00"), Color(hex: "#006600")]
         case .blue:
-            colors = [Color(hex: "#8FE7FF"), Color(hex: "#2F8CFF"), Color(hex: "#123A73")]
+            return [Color(hex: "#8FE7FF"), Color(hex: "#2F8CFF"), Color(hex: "#123A73")]
         case .amber:
-            colors = [Color(hex: "#FFE08A"), Color(hex: "#FF9F1A"), Color(hex: "#8A4B00")]
+            return [Color(hex: "#FFE08A"), Color(hex: "#FF9F1A"), Color(hex: "#8A4B00")]
         }
-        return LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
+    }
+
+    /// 原生绘制用。颜色和 `colors` 一一对应。
+    var nsColors: [NSColor] {
+        switch self {
+        case .green:
+            return [
+                NSColor(srgbRed: 0x00 / 255, green: 0xFF / 255, blue: 0x00 / 255, alpha: 1),
+                NSColor(srgbRed: 0x00 / 255, green: 0xAA / 255, blue: 0x00 / 255, alpha: 1),
+                NSColor(srgbRed: 0x00 / 255, green: 0x66 / 255, blue: 0x00 / 255, alpha: 1)
+            ]
+        case .blue:
+            return [
+                NSColor(srgbRed: 0x8F / 255, green: 0xE7 / 255, blue: 0xFF / 255, alpha: 1),
+                NSColor(srgbRed: 0x2F / 255, green: 0x8C / 255, blue: 0xFF / 255, alpha: 1),
+                NSColor(srgbRed: 0x12 / 255, green: 0x3A / 255, blue: 0x73 / 255, alpha: 1)
+            ]
+        case .amber:
+            return [
+                NSColor(srgbRed: 0xFF / 255, green: 0xE0 / 255, blue: 0x8A / 255, alpha: 1),
+                NSColor(srgbRed: 0xFF / 255, green: 0x9F / 255, blue: 0x1A / 255, alpha: 1),
+                NSColor(srgbRed: 0x8A / 255, green: 0x4B / 255, blue: 0x00 / 255, alpha: 1)
+            ]
+        }
+    }
+
+    var gradient: LinearGradient {
+        LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
     }
 }
 

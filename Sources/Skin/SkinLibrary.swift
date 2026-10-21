@@ -33,32 +33,33 @@ final class SkinLibrary: ObservableObject {
     @Published var skin: LoadedSkin?
 
     func loadDefault() {
+        skin = Self.findSkin()
+    }
+
+    private static func findSkin() -> LoadedSkin? {
         if let directory = UserDefaults.standard.string(forKey: "skin.directory") {
             let url = URL(fileURLWithPath: directory)
             if let loaded = Self.load(directory: url) {
-                skin = loaded
                 print("皮肤 \(loaded.name) \(Int(loaded.player.size.width))×\(Int(loaded.player.size.height)) 来自 \(url.path)")
-                return
+                return loaded
             }
         }
 
         if let path = UserDefaults.standard.string(forKey: "skin.dll") {
             let url = URL(fileURLWithPath: path)
             if let loaded = Self.load(dll: url) {
-                skin = loaded
                 print("皮肤 \(loaded.name) \(Int(loaded.player.size.width))×\(Int(loaded.player.size.height)) 来自 \(url.path)")
-                return
+                return loaded
             }
         }
 
         let candidates = Self.candidateDLLs()
         for url in candidates where FileManager.default.fileExists(atPath: url.path) {
             if let loaded = Self.load(dll: url) {
-                skin = loaded
                 let line = "皮肤 \(loaded.name) \(Int(loaded.player.size.width))×\(Int(loaded.player.size.height)) 来自 \(url.path)"
                 print(line)
                 Self.log(line)
-                return
+                return loaded
             }
             print("找到 \(url.path)，但皮肤解析失败")
             Self.log("解析失败 \(url.path)")
@@ -69,6 +70,7 @@ final class SkinLibrary: ObservableObject {
             print("  \(url.path)")
             Self.log("miss \(url.path)")
         }
+        return nil
     }
 
     private static func log(_ line: String) {
@@ -192,6 +194,10 @@ final class SkinLibrary: ObservableObject {
         var seeds = [URL(fileURLWithPath: FileManager.default.currentDirectoryPath)]
         if let executable = Bundle.main.executableURL?.deletingLastPathComponent() {
             seeds.append(executable)
+        }
+        // 打包进 app 的皮肤放在 Contents/Resources 里
+        if let resources = Bundle.main.resourceURL {
+            seeds.append(resources)
         }
         var urls: [URL] = []
         var seen = Set<String>()
